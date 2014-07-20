@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Trillian AB
+ * Copyright (C) 2013 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,14 +18,14 @@ package org.robovm.objc.block;
 import org.robovm.objc.ObjCBlock;
 import org.robovm.objc.ObjCBlock.Wrapper;
 import org.robovm.rt.bro.annotation.Callback;
-import org.robovm.rt.bro.annotation.Marshaler;
-import org.robovm.rt.bro.annotation.Pointer;
 
 /**
  * Block which takes no arguments and returns no value. This is used to map the
  * Objective-C {@code void (^)(void)} block type.
+ * 
+ * @deprecated Use {@link Runnable} instead.
  */
-@Marshaler(VoidBlock.Marshaler.class)
+@Deprecated
 public interface VoidBlock {
 
     /**
@@ -41,9 +41,8 @@ public interface VoidBlock {
     
     static class Marshaler {
         private static final Wrapper WRAPPER = new Wrapper(Callbacks.class);
-        public static @Pointer long toNative(Object o) {
-            return WRAPPER.toNative(o);
+        public static ObjCBlock toObjCBlock(VoidBlock o) {
+            return WRAPPER.toObjCBlock(o);
         }
-        public static void updateObject(Object o, long handle) {}
     }
 }

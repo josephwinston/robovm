@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -118,7 +118,7 @@ struct ProxyMethodException {
 
 struct Interface {
   Interface* next;
-  Class* interface;
+  Class* interfaze;
 };
 
 struct Object {
@@ -346,6 +346,13 @@ typedef struct Env Env;
 struct TrycatchContext;
 typedef struct TrycatchContext TrycatchContext;
 
+typedef struct SystemProperty SystemProperty;
+struct SystemProperty {
+  char* key;
+  char* value;
+  SystemProperty* next;
+};
+
 typedef struct Options {
     char* mainClass;
     char** commandLineArgs;
@@ -357,9 +364,11 @@ typedef struct Options {
     char executablePath[PATH_MAX];
     char** rawBootclasspath; 
     char** rawClasspath; 
+    SystemProperty* properties;
     ClasspathEntry* bootclasspath;
     ClasspathEntry* classpath;
     jboolean dynamicJNI;
+    char** staticLibs; 
     Class* (*loadBootClass)(Env*, const char*, ClassLoader*);
     Class* (*loadUserClass)(Env*, const char*, ClassLoader*);
     void (*classInitialized)(Env*, Class*);
@@ -368,6 +377,8 @@ typedef struct Options {
     Method* (*loadMethods)(Env*, Class*);
     Class* (*findClassAt)(Env*, void*);
     jboolean (*exceptionMatch)(Env*, TrycatchContext*);
+    ObjectArray* (*listBootClasses)(Env*, Class*);
+    ObjectArray* (*listUserClasses)(Env*, Class*);
 } Options;
 
 typedef struct VM {

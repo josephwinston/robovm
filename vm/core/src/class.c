@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -495,21 +495,12 @@ jboolean rvmIsAssignableFrom(Env* env, Class* s, Class* t) {
     }
 
     if (CLASS_IS_INTERFACE(t)) {
-        uint32_t ifCount = sti->interfaceCount;
-        uint32_t* base = (uint32_t*) ((((char*) sti) + sti->offset) + sizeof(uint32_t));
-        uint32_t i;
-        for (i = 0; i < ifCount; i++) {
-            if (*base == id) goto found;
-            base++;
-        }
+        if (rvmIsInterfaceTypeInfoAssignable(env, sti, tti)) goto found;
         return FALSE;
     }
 
     // t must be a class or array class
-    if (tti->offset <= sti->offset) {
-        uint32_t* base = (uint32_t*) (((char*) sti) + tti->offset);
-        if (*base == id) goto found;
-    }
+    if (rvmIsClassTypeInfoAssignable(env, sti, tti)) goto found;
 
     // The TypeInfo of array classes doesn't give the complete information.
     if (CLASS_IS_ARRAY(t) && CLASS_IS_ARRAY(s) 
@@ -859,10 +850,10 @@ Class* rvmAllocateClass(Env* env, const char* className, Class* superclass, Clas
 }
 
 Interface* rvmAllocateInterface(Env* env, Class* interf) {
-    Interface* interface = rvmAllocateMemoryAtomicUncollectable(env, sizeof(Interface));
-    if (!interface) return NULL;
-    interface->interface = interf;
-    return interface;
+    Interface* interfaze = rvmAllocateMemoryAtomicUncollectable(env, sizeof(Interface));
+    if (!interfaze) return NULL;
+    interfaze->interfaze = interf;
+    return interfaze;
 }
 
 jboolean rvmAddInterface(Env* env, Class* clazz, Class* interf) {
@@ -872,12 +863,12 @@ jboolean rvmAddInterface(Env* env, Class* clazz, Class* interf) {
         rvmThrowIncompatibleClassChangeError(env, "");
         return FALSE;
     }
-    Interface* interface = rvmAllocateInterface(env, interf);
-    if (!interface) return FALSE;
+    Interface* interfaze = rvmAllocateInterface(env, interf);
+    if (!interfaze) return FALSE;
     if (clazz->_interfaces == &INTERFACES_NOT_LOADED) {
         clazz->_interfaces = NULL;
     }
-    LL_APPEND(clazz->_interfaces, interface);
+    LL_APPEND(clazz->_interfaces, interfaze);
     return TRUE;
 }
 
@@ -1117,6 +1108,10 @@ jboolean rvmRegisterClass(Env* env, Class* clazz) {
 
 void rvmInitialize(Env* env, Class* clazz) {
     assert(env->currentThread != NULL);
+
+    if (CLASS_IS_STATE_INITIALIZED(clazz)) {
+        return;
+    }
 
     // The initialization of a class or interface is described in the JVMS JavaSE7 edition section 5.5
     rvmLockObject(env, (Object*) clazz);
@@ -1539,6 +1534,10 @@ Object* rvmCloneObject(Env* env, Object* obj) {
     if (!copy) return NULL;
     memcpy(copy, obj, size);
     copy->lock = 0;
+    if (CLASS_IS_FINALIZABLE(copy->clazz)) {
+        rvmRegisterFinalizer(env, copy);
+        if (rvmExceptionCheck(env)) return NULL;
+    }
     return copy;
 }
 
@@ -1558,3 +1557,17 @@ void rvmDumpLoadedClasses(Env* env) {
     rvmIterateLoadedClasses(env, dumpClassesIterator, NULL);
 }
 
+ObjectArray* rvmListClasses(Env* env, Class* instanceofClass, ClassLoader* classLoader) {
+    if (!classLoader || classLoader->parent == NULL) {
+        // This is the bootstrap classloader
+        return env->vm->options->listBootClasses(env, instanceofClass);
+    }
+    return env->vm->options->listUserClasses(env, instanceofClass);
+}
+
+void rvmObtainClassLock(Env* env) {
+    obtainClassLock();
+}
+void rvmReleaseClassLock(Env* env) {
+    releaseClassLock();
+}

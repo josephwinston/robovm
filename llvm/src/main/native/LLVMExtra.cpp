@@ -105,26 +105,6 @@ LLVMBool LLVMParseIR(LLVMMemoryBufferRef MemBuf,
   return LLVMParseIRInContext(wrap(&getGlobalContext()), MemBuf, OutModule, OutMessage);
 }
 
-LLVMBool LLVMParseIRInContext(LLVMContextRef ContextRef,
-                                   LLVMMemoryBufferRef MemBuf,
-                                   LLVMModuleRef *OutModule,
-                                   char **OutMessage) {
-
-  SMDiagnostic Err;
-  *OutModule = wrap(ParseIR(unwrap(MemBuf), Err, *unwrap(ContextRef)));
-  if (!*OutModule) {
-    if (OutMessage) {
-      std::string s("");
-      raw_string_ostream os(s);
-      Err.print(NULL, os, false);
-      *OutMessage = strdup(os.str().data());
-    }
-    return 1;
-  }
-
-  return 0;
-}
-
 LLVMTargetRef LLVMLookupTarget(const char *Triple, char **ErrorMessage) {
   std::string Error;
   const Target *TheTarget = TargetRegistry::lookupTarget(std::string(Triple), Error);
@@ -222,9 +202,6 @@ void LLVMTargetOptionsSetPrintMachineCode(LLVMTargetOptionsRef O, LLVMBool V) { 
 LLVMBool LLVMTargetOptionsGetNoFramePointerElim(LLVMTargetOptionsRef O) { return (LLVMBool) unwrap(O)->NoFramePointerElim; }
 void LLVMTargetOptionsSetNoFramePointerElim(LLVMTargetOptionsRef O, LLVMBool V) { unwrap(O)->NoFramePointerElim = V; }
 
-LLVMBool LLVMTargetOptionsGetNoFramePointerElimNonLeaf(LLVMTargetOptionsRef O) { return (LLVMBool) unwrap(O)->NoFramePointerElimNonLeaf; }
-void LLVMTargetOptionsSetNoFramePointerElimNonLeaf(LLVMTargetOptionsRef O, LLVMBool V) { unwrap(O)->NoFramePointerElimNonLeaf = V; }
-
 LLVMBool LLVMTargetOptionsGetLessPreciseFPMADOption(LLVMTargetOptionsRef O) { return (LLVMBool) unwrap(O)->LessPreciseFPMADOption; }
 void LLVMTargetOptionsSetLessPreciseFPMADOption(LLVMTargetOptionsRef O, LLVMBool V) { unwrap(O)->LessPreciseFPMADOption = V; }
 
@@ -261,12 +238,6 @@ void LLVMTargetOptionsSetDisableTailCalls(LLVMTargetOptionsRef O, LLVMBool V) { 
 unsigned LLVMTargetOptionsGetStackAlignmentOverride(LLVMTargetOptionsRef O) { return (unsigned) unwrap(O)->StackAlignmentOverride; }
 void LLVMTargetOptionsSetStackAlignmentOverride(LLVMTargetOptionsRef O, unsigned V) { unwrap(O)->StackAlignmentOverride = V; }
 
-LLVMBool LLVMTargetOptionsGetRealignStack(LLVMTargetOptionsRef O) { return (LLVMBool) unwrap(O)->RealignStack; }
-void LLVMTargetOptionsSetRealignStack(LLVMTargetOptionsRef O, LLVMBool V) { unwrap(O)->RealignStack = V; }
-
-unsigned LLVMTargetOptionsGetSSPBufferSize(LLVMTargetOptionsRef O) { return (unsigned) unwrap(O)->SSPBufferSize; }
-void LLVMTargetOptionsSetSSPBufferSize(LLVMTargetOptionsRef O, unsigned V) { unwrap(O)->SSPBufferSize = V; }
-
 LLVMBool LLVMTargetOptionsGetEnableFastISel(LLVMTargetOptionsRef O) { return (LLVMBool) unwrap(O)->EnableFastISel; }
 void LLVMTargetOptionsSetEnableFastISel(LLVMTargetOptionsRef O, LLVMBool V) { unwrap(O)->EnableFastISel = V; }
 
@@ -293,8 +264,10 @@ static void assembleDiagHandler(const SMDiagnostic &Diag, void *Context) {
 int LLVMTargetMachineAssembleToOutputStream(LLVMTargetMachineRef TM, LLVMMemoryBufferRef Mem, void *JOStream, LLVMBool RelaxAll, LLVMBool NoExecStack, char **ErrorMessage) {
   *ErrorMessage = NULL;
 
+#if !defined(WIN32)
   locale_t loc = newlocale(LC_ALL_MASK, "C", 0);
   locale_t oldLoc = uselocale(loc);
+#endif
 
   TargetMachine *TheTargetMachine = unwrap(TM);
   const Target *TheTarget = &(TheTargetMachine->getTarget());
@@ -319,10 +292,10 @@ int LLVMTargetMachineAssembleToOutputStream(LLVMTargetMachineRef TM, LLVMMemoryB
   // it later.
 //  SrcMgr.setIncludeDirs(IncludeDirs);
 
-  OwningPtr<MCAsmInfo> MAI(TheTarget->createMCAsmInfo(TripleName));
   OwningPtr<MCRegisterInfo> MRI(TheTarget->createMCRegInfo(TripleName));
+  OwningPtr<MCAsmInfo> MAI(TheTarget->createMCAsmInfo(*MRI, TripleName));
   OwningPtr<MCObjectFileInfo> MOFI(new MCObjectFileInfo());
-  MCContext Ctx(*MAI, *MRI, MOFI.get(), &SrcMgr);
+  MCContext Ctx(MAI.get(), MRI.get(), MOFI.get(), &SrcMgr);
   MOFI->InitMCObjectFileInfo(TripleName, RelocModel, CMModel, Ctx);
 
   OwningPtr<MCInstrInfo> MCII(TheTarget->createMCInstrInfo());
@@ -332,14 +305,14 @@ int LLVMTargetMachineAssembleToOutputStream(LLVMTargetMachineRef TM, LLVMMemoryB
 
   OwningPtr<MCStreamer> Str;
   MCCodeEmitter *CE = TheTarget->createMCCodeEmitter(*MCII, *MRI, *STI, Ctx);
-  MCAsmBackend *MAB = TheTarget->createMCAsmBackend(TripleName, MCPU);
+  MCAsmBackend *MAB = TheTarget->createMCAsmBackend(*MRI, TripleName, MCPU);
   Str.reset(TheTarget->createMCObjectStreamer(TripleName, Ctx, *MAB,
                                               Out, CE, RelaxAll != 0,
                                               NoExecStack != 0));
 
 
   OwningPtr<MCAsmParser> Parser(createMCAsmParser(SrcMgr, Ctx, *Str, *MAI));
-  OwningPtr<MCTargetAsmParser> TAP(TheTarget->createMCAsmParser(*STI, *Parser));
+  OwningPtr<MCTargetAsmParser> TAP(TheTarget->createMCAsmParser(*STI, *Parser, *MCII));
   if (!TAP) {
     *ErrorMessage = strdup("this target does not support assembly parsing");
     goto done;
@@ -354,8 +327,10 @@ int LLVMTargetMachineAssembleToOutputStream(LLVMTargetMachineRef TM, LLVMMemoryB
   Out.flush();
 
 done:
+#if !defined(WIN32)
   uselocale(oldLoc);
   freelocale(loc);
+#endif
   return *ErrorMessage ? 1 : 0;
 }
 
@@ -401,15 +376,19 @@ static LLVMBool LLVMTargetMachineEmit(LLVMTargetMachineRef T, LLVMModuleRef M,
 LLVMBool LLVMTargetMachineEmitToOutputStream(LLVMTargetMachineRef T, LLVMModuleRef M,
   void *JOStream, LLVMCodeGenFileType codegen, char** ErrorMessage) {
 
+#if !defined(WIN32)
   locale_t loc = newlocale(LC_ALL_MASK, "C", 0);
   locale_t oldLoc = uselocale(loc);
+#endif
 
   formatted_raw_ostream Out(*((raw_java_ostream*) JOStream));
   bool Result = LLVMTargetMachineEmit(T, M, Out, codegen, ErrorMessage);
   Out.flush();
 
+#if !defined(WIN32)
   uselocale(oldLoc);
   freelocale(loc);
+#endif
 
   return Result;
 }

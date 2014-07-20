@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -46,7 +46,7 @@ public abstract class Clazz implements Comparable<Clazz> {
     Clazz(Clazzes clazzes, String fileName, AbstractPath path) {
         this.clazzes = clazzes;
         this.fileName = fileName;
-        this.className = fileName.replace(File.separatorChar, '.').substring(0, fileName.lastIndexOf(".class"));
+        this.className = fileName.replace('/', '.').replace('\\', '.').substring(0, fileName.lastIndexOf(".class"));
         this.internalName = className.replace('.', '/');
         this.path = path;
     }
@@ -101,6 +101,7 @@ public abstract class Clazz implements Comparable<Clazz> {
             throw new IllegalStateException();
         }
         File infoFile = clazzes.getConfig().getInfoFile(this);
+        infoFile.getParentFile().mkdirs();
         ObjectOutputStream oos = null;
         try {
             oos = new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(infoFile)));

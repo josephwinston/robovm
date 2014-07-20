@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -259,13 +259,17 @@ public class Types {
     
     @SuppressWarnings("unchecked")
     public static String getDescriptor(SootMethodRef methodRef) {
+        return getDescriptor(methodRef.parameterTypes(), methodRef.returnType());
+    }
+    
+    public static String getDescriptor(List<soot.Type> paramTypes, soot.Type returnType) {
         StringBuilder sb = new StringBuilder();
         sb.append('(');
-        for (soot.Type t : (List<soot.Type>) methodRef.parameterTypes()) {
+        for (soot.Type t : paramTypes) {
             sb.append(getDescriptor(t));
         }
         sb.append(')');
-        sb.append(getDescriptor(methodRef.returnType()));
+        sb.append(getDescriptor(returnType));
         return sb.toString();
     }
     
@@ -317,6 +321,28 @@ public class Types {
 
     public static boolean isArray(String descriptor) {
         return descriptor.charAt(0) == '[';
+    }
+    
+    public static boolean isNativeObject(soot.Type t) {
+        if (t instanceof RefType) {
+            return isNativeObject(((RefType) t).getSootClass());
+        }
+        return false;
+    }
+    
+    public static boolean isNativeObject(SootClass sc) {
+        return isSubclass(sc, "org.robovm.rt.bro.NativeObject");
+    }
+    
+    public static boolean isStruct(soot.Type t) {
+        if (t instanceof RefType) {
+            return isStruct(((RefType) t).getSootClass());
+        }
+        return false;
+    }
+    
+    public static boolean isStruct(SootClass sc) {
+        return isSubclass(sc, "org.robovm.rt.bro.Struct");
     }
     
     public static boolean isPrimitiveComponentType(String descriptor) {
@@ -403,6 +429,21 @@ public class Types {
             }
         }
         return false;
+    }
+    
+    public static boolean isInstanceOfClass(soot.Type t, String className) {
+        if (t instanceof RefType) {
+            return isInstanceOfClass(((RefType) t).getSootClass(), className);
+        }
+        return false;
+    }
+    
+    public static boolean isInstanceOfClass(SootClass sc, String className) {
+        SootClass clazz = sc;
+        if (className.equals(clazz.getName())) {
+            return true;
+        }
+        return isSubclass(sc, className);
     }
     
     public static Constant sizeof(AggregateType type) {

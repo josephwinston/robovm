@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -42,7 +42,7 @@ public class NativeMethodCompiler extends AbstractMethodCompiler {
         super(config);
     }
 
-    protected void doCompile(ModuleBuilder moduleBuilder, SootMethod method) {
+    protected Function doCompile(ModuleBuilder moduleBuilder, SootMethod method) {
         Function fn = FunctionBuilder.method(method);
         moduleBuilder.addFunction(fn);
 
@@ -67,5 +67,7 @@ public class NativeMethodCompiler extends AbstractMethodCompiler {
         popNativeFrame(fn);
         call(fn, BC_THROW_IF_EXCEPTION_OCCURRED, env);
         fn.add(new Ret(result));
+        
+        return fn;
     }
 }

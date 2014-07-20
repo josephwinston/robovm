@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ static InstanceField* stringValueField = NULL;
 static InstanceField* stringOffsetField = NULL;
 static InstanceField* stringCountField = NULL;
 static uint32_t cacheEntryGCKind;
+static const jchar EMPTY_JCHARS = 0;
 
 // TODO: Restrict the number of bytes stored in the cache instead of the number of String objects.
 #define MAX_CACHE_SIZE 10000
@@ -234,6 +235,8 @@ Object* rvmNewStringNoCopy(Env* env, CharArray* value, jint offset, jint length)
 }
 
 Object* rvmNewStringAscii(Env* env, const char* s, jint length) {
+    if (length == 0) s = "";
+    if (!s) return NULL;
     length = (length == -1) ? strlen(s) : length;
     CharArray* value = rvmNewCharArray(env, length);
     if (!value) return NULL;
@@ -245,6 +248,7 @@ Object* rvmNewStringAscii(Env* env, const char* s, jint length) {
 }
 
 Object* rvmNewStringUTF(Env* env, const char* s, jint length) {
+    if (length == 0) s = "";
     if (!s) return NULL;
     length = (length == -1) ? getUnicodeLengthOfUtf8(s) : length;
     CharArray* value = rvmNewCharArray(env, length);
@@ -254,6 +258,7 @@ Object* rvmNewStringUTF(Env* env, const char* s, jint length) {
 }
 
 Object* rvmNewString(Env* env, const jchar* chars, jint length) {
+    if (length == 0) chars = &EMPTY_JCHARS;
     if (!chars) return NULL;
     CharArray* value = rvmNewCharArray(env, length);
     if (!value) return NULL;
@@ -262,6 +267,7 @@ Object* rvmNewString(Env* env, const jchar* chars, jint length) {
 }
 
 Object* rvmNewInternedStringUTF(Env* env, const char* s, jint length) {
+    if (length == 0) s = "";
     if (!s) return NULL;
 
     obtainInternedStringsLock();

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -50,9 +50,9 @@ public class Alias {
     
     public String getDefinition() {
         StringBuilder sb = new StringBuilder();
-        sb.append('@');
+        sb.append("@\"");
         sb.append(name);
-        sb.append(" = alias ");
+        sb.append("\" = alias ");
         if (linkage != null) {
             sb.append(linkage);
             sb.append(' ');

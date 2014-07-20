@@ -159,7 +159,7 @@ public class EnumMap<K extends Enum<K>, V> extends AbstractMap<K, V> implements
                 throw new NoSuchElementException();
             }
             prePosition = position++;
-            return type.get(new MapEntry(enumMap.keys[prePosition],
+            return (E) type.get(new MapEntry(enumMap.keys[prePosition], // RoboVM note: Added cast to (E) to make this line compile with Oracle's Java8 JDK
                     enumMap.values[prePosition]));
         }
 
@@ -436,8 +436,8 @@ public class EnumMap<K extends Enum<K>, V> extends AbstractMap<K, V> implements
         if (map instanceof EnumMap) {
             initialization((EnumMap<K, V>) map);
         } else {
-            if (map.size() == 0) {
-                throw new IllegalArgumentException();
+            if (map.isEmpty()) {
+                throw new IllegalArgumentException("map is empty");
             }
             Iterator<K> iter = map.keySet().iterator();
             K enumKey = iter.next();
@@ -773,7 +773,7 @@ public class EnumMap<K extends Enum<K>, V> extends AbstractMap<K, V> implements
     @SuppressWarnings("unchecked")
     private V putImpl(K key, V value) {
         if (key == null) {
-            throw new NullPointerException();
+            throw new NullPointerException("key == null");
         }
         keyType.cast(key); // Called to throw ClassCastException.
         int keyOrdinal = key.ordinal();

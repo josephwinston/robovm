@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -37,7 +37,8 @@ import java.util.UUID;
 import org.apache.commons.exec.ExecuteException;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
-import org.json.JSONObject;
+import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 import org.robovm.compiler.clazz.Clazz;
 import org.robovm.compiler.clazz.Dependency;
 import org.robovm.compiler.clazz.Path;
@@ -66,7 +67,6 @@ public class AppCompiler {
      */
     private static final String[] ROOT_CLASS_PATTERNS = {
         "java.lang.**.*",
-        "org.apache.harmony.lang.annotation.*",
         "org.robovm.rt.**.*"
     };
     /**
@@ -82,6 +82,7 @@ public class AppCompiler {
         "java/net/Inet6Address",
         "java/net/InetAddress",
         "java/net/InetSocketAddress",
+        "java/net/InetUnixAddress",
         "java/net/Socket",
         "java/net/SocketImpl",
         "java/nio/charset/CharsetICU",
@@ -101,7 +102,7 @@ public class AppCompiler {
         "libcore/io/StructPasswd",
         "libcore/io/StructPollfd",
         "libcore/io/StructStat",
-        "libcore/io/StructStatFs",
+        "libcore/io/StructStatVfs",
         "libcore/io/StructTimeval",
         "libcore/io/StructUtsname",
         "libcore/util/MutableInt",
@@ -109,7 +110,7 @@ public class AppCompiler {
     };
 
     private static final String TRUSTED_CERTIFICATE_STORE_CLASS = 
-            "org/apache/harmony/xnet/provider/jsse/TrustedCertificateStore";
+            "com/android/org/conscrypt/TrustedCertificateStore";
     
     private final Config config;
     private final ClassCompiler classCompiler;
@@ -146,7 +147,7 @@ public class AppCompiler {
      * 
      * The classes matching {@link #ROOT_CLASS_PATTERNS} and {@link #ROOT_CLASSES} will always be 
      * included. If a main class has been specified it will also become a root. Any root class 
-     * pattern specified on the command line (as returned by {@link Config#getRoots()} will also be 
+     * pattern specified on the command line (as returned by {@link Config#getRoots()} will also be
      * used to find root classes. If no main class has been specified and {@link Config#getRoots()} 
      * returns an empty set all classes available on the bootclasspath and the classpath will become 
      * roots.
@@ -157,7 +158,11 @@ public class AppCompiler {
             classes.addAll(getMatchingClasses(rootClassPattern));            
         }
         for (String rootClassName : ROOT_CLASSES) {
-            classes.add(config.getClazzes().load(rootClassName));            
+            Clazz clazz = config.getClazzes().load(rootClassName);
+            if (clazz == null) {
+                throw new CompilerException("Root class " + rootClassName + " not found");
+            }
+            classes.add(clazz);            
         }
 
         if (config.getMainClass() != null) {
@@ -288,10 +293,14 @@ public class AppCompiler {
                     builder.debug(true);
                 } else if ("-use-debug-libs".equals(args[i])) {
                     builder.useDebugLibs(true);
+                } else if ("-dump-intermediates".equals(args[i])) {
+                    builder.dumpIntermediates(true);
                 } else if ("-dynamic-jni".equals(args[i])) {
                     builder.useDynamicJni(true);
                 } else if ("-skiprt".equals(args[i])) {
                     builder.skipRuntimeLib(true);
+                } else if ("-skipsign".equals(args[i])) {
+                    builder.iosSkipSigning(true);
                 } else if ("-clean".equals(args[i])) {
                     builder.clean(true);
                 } else if ("-help".equals(args[i]) || "-?".equals(args[i])) {
@@ -318,7 +327,7 @@ public class AppCompiler {
                     }
                 } else if ("-libs".equals(args[i])) {
                     for (String p : args[++i].split(":")) {
-                        builder.addLib(p);
+                        builder.addLib(new Config.Lib(p, true));
                     }
                 } else if ("-exportedsymbols".equals(args[i])) {
                     for (String p : args[++i].split(":")) {
@@ -444,6 +453,11 @@ public class AppCompiler {
                         if (launchParameters instanceof IOSSimulatorLaunchParameters) {
                             String name = launchArgs.get(i++);
                             try {
+                                if (name.equals("iphone")) {
+                                    name = Family.iPhoneRetina4Inch.name();
+                                } else if (name.equals("ipad")) {
+                                    name = Family.iPadRetina.name();
+                                }
                                 ((IOSSimulatorLaunchParameters) launchParameters).setFamily(Family.valueOf(name));
                             } catch (IllegalArgumentException e) {
                                 throw new IllegalArgumentException("Illegal -ios-sim-family value: " + name);
@@ -561,6 +575,9 @@ public class AppCompiler {
         System.err.println("  -weakframeworks <list>\n" 
                          + "                        : separated list of frameworks that should be weakly linked\n" 
                          + "                        into the final executable.");
+        System.err.println("  -frameworkpaths <list>\n" 
+                         + "                        : separated list of framework search paths used when searching\n" 
+                         + "                        for custom frameworks.");
         System.err.println("  -resources <list>     : separated list of files and directories that should be\n"
                          + "                        copied to the install dir. Accepts Ant-style patterns.\n" 
                          + "                        If a pattern is specified the left-most path before the\n" 
@@ -594,6 +611,8 @@ public class AppCompiler {
         System.err.println("  -resourcerules <file> (iOS) Property list (.plist) file containing resource rules\n" 
                          + "                        passed to codesign when signing the app.");
         System.err.println("  -signidentity <id>    (iOS) Sign using this identity. Default is 'iPhone Developer'.");
+        System.err.println("  -skipsign             (iOS) Skips signing of the compiled Application. Can be used\n"
+                         + "                        to create unsigned packages for testing on a jailbroken device.");
         System.err.println("  -provisioningprofile <file>\n" 
                          + "                        (iOS) Provisioning profile to use when building for a device.\n" 
                          + "                        Either a UUID, an app name or app id prefix. If not specified\n" 
@@ -603,7 +622,9 @@ public class AppCompiler {
                          + "                        specified the latest SDK that can be found will be used.");
         System.err.println("iOS simulator launch options:");
         System.err.println("  -ios-sim-family <fam> The device type that should be simulated. Valid values are\n" 
-                         + "                        'iphone' (default) and 'ipad'.");
+                         + "                        'iPhoneRetina35Inch', 'iPhoneRetina4Inch' (default), 'iPad' and\n"
+                         + "                        'iPadRetina'. Accepts aliases 'iphone' ('iPhoneRetina4Inch')\n"
+                         + "                        and 'ipad' ('iPadRetina').");
         System.err.println("  -ios-sim-sdk <sdk>    The iOS SDK version to run the application on (defaults to\n" 
                          + "                        the latest).");
         
@@ -653,7 +674,7 @@ public class AppCompiler {
             t.join(5 * 1000); // Wait for a maximum of 5 seconds
             JSONObject result = t.result;
             if (result != null) {
-                String version = result.optString("version", null);
+                String version = (String) result.get("version");
                 if (version != null && Version.isOlderThan(version)) {
                     config.getLogger().info("A new version of RoboVM is available. " 
                             + "Current version: %s. New version: %s.", Version.getVersion(), version);
@@ -704,7 +725,7 @@ public class AppCompiler {
             conn.setConnectTimeout(5 * 1000);
             conn.setReadTimeout(5 * 1000);
             try (InputStream in = new BufferedInputStream(conn.getInputStream())) {
-                return new JSONObject(IOUtils.toString(in, "UTF-8"));
+                return (JSONObject) JSONValue.parseWithException(IOUtils.toString(in, "UTF-8"));
             }
         } catch (Exception e) {
             if (config.getHome().isDev()) {

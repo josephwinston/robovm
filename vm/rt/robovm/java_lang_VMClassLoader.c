@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include <robovm.h>
+
+#define LOG_TAG "java.lang.VMClassLoader"
 
 char* toBinaryName(Env* env, Object* className) {
     if (!className) {
@@ -39,7 +41,19 @@ Class* Java_java_lang_VMClassLoader_findClassInClasspathForLoader(Env* env, Clas
     char* classNameUTF = toBinaryName(env, name);
     if (!classNameUTF) return NULL;
     Class* clazz = rvmFindClassInClasspathForLoader(env, classNameUTF, cl);
-    if (!clazz) return NULL;
+    if (!clazz) {
+        char* p = classNameUTF;
+        while (*p != '\0') {
+            if (*p == '/') *p = '.';
+            p++;
+        }
+        // TODO: Should we use WARNF?
+        TRACEF("VMClassLoader.findClassInClasspathForLoader() failed to load '%s'. "
+              "Use the -forcelinkclasses command line option "
+              "or add <forceLinkClasses><pattern>%s</pattern></forceLinkClasses> "
+              "to your robovm.xml file to link it in.",
+              classNameUTF, classNameUTF);
+    }
     return clazz;
 }
 

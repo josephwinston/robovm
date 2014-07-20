@@ -1,7 +1,7 @@
 /*
 ******************************************************************************
 *
-*   Copyright (C) 1999-2011, International Business Machines
+*   Copyright (C) 1999-2012, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 ******************************************************************************
@@ -14,9 +14,9 @@
 *   created by: Markus W. Scherer
 */
 
-#include "unicode/utypes.h"  /* U_LINUX */
+#include "unicode/utypes.h"  /* U_PLATFORM etc. */
 
-#ifdef U_LINUX
+#ifdef __GNUC__
 /* if gcc
 #define ATTRIBUTE_WEAK __attribute__ ((weak))
 might have to #include some other header
@@ -73,10 +73,6 @@ might have to #include some other header
 #define LENGTHOF(array) (int32_t)(sizeof(array)/sizeof((array)[0]))
 
 U_NAMESPACE_USE
-
-// RoboVM note: When set this allows us to intercept lookups in the data file and modify
-// the entry names to support loading of data files not compiled for this ICU version.
-void (*icuModTocEntryNameFunc)(const char *, char *) = NULL;
 
 /*
  *  Forward declarations
@@ -810,7 +806,7 @@ static UBool extendICUData(UErrorCode *pErr)
      * Use a specific mutex to avoid nested locks of the global mutex.
      */
 #if MAP_IMPLEMENTATION==MAP_STDIO
-    static UMTX extendICUDataMutex = NULL;
+    static UMutex extendICUDataMutex = U_MUTEX_INITIALIZER;
     umtx_lock(&extendICUDataMutex);
 #endif
     if(!gHaveTriedToLoadCommonData) {
@@ -1045,14 +1041,6 @@ static UDataMemory *doLoadFromCommonData(UBool isICUData, const char * /*pkgName
 
         if(U_SUCCESS(*subErrorCode) && pCommonData!=NULL) {
             int32_t length;
-
-            // RoboVM note: Hack to intercept lookups in the data file and modify the entry names.
-            char modTocEntryName[64];
-            if (icuModTocEntryNameFunc) {
-                icuModTocEntryNameFunc(tocEntryName, modTocEntryName);
-                tocEntryName = modTocEntryName;
-            }
-            // RoboVM note: End hack.
 
             /* look up the data piece in the common data */
             pHeader=pCommonData->vFuncs->Lookup(pCommonData, tocEntryName, &length, subErrorCode);

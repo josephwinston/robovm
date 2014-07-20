@@ -1,0 +1,97 @@
+package: org.robovm.apple.coreaudio
+include: [foundation.yaml, corefoundation.yaml]
+library: CoreAudio
+framework: CoreAudio
+clang_args: ['-x', 'objective-c']
+headers:
+    - /System/Library/Frameworks/CoreAudio.framework/Headers/CoreAudioTypes.h
+typedefs: {}
+    
+enums:
+    AudioError: { first: kAudio_UnimplementedError, prefix: kAudio_, suffix: Error }
+    AudioFormat: { first: kAudioFormatLinearPCM, prefix: kAudioFormat, marshaler: ValuedEnum.AsMachineSizedUIntMarshaler }
+    SMPTETimeType: { first: kSMPTETimeType24, prefix: kSMPTETimeType, marshaler: ValuedEnum.AsMachineSizedUIntMarshaler }
+    SMPTEStateFlags: { first: kSMPTETimeValid, prefix: kSMPTETime, marshaler: ValuedEnum.AsMachineSizedUIntMarshaler }
+    AudioChannelLabel: { first: kAudioChannelLabel_Unknown, prefix: kAudioChannelLabel_, marshaler: ValuedEnum.AsMachineSizedUIntMarshaler }
+    AudioChannelBit: { first: kAudioChannelBit_Left, prefix: kAudioChannelBit_, bits: true, marshaler: Bits.AsMachineSizedIntMarshaler }
+    AudioChannelFlag: { first: kAudioChannelFlags_AllOff, prefix: kAudioChannelFlags_, bits: true, marshaler: Bits.AsMachineSizedIntMarshaler }
+    AudioChannelLayoutTag: { first: kAudioChannelLayoutTag_UseChannelDescriptions, prefix: kAudioChannelLayoutTag_, marshaler: ValuedEnum.AsMachineSizedUIntMarshaler }
+    
+classes:
+    # Structs:
+    AudioValueRange: {}
+    AudioValueTranslation: {}
+    AudioBuffer: {}
+    AudioBufferList: {}
+    AudioStreamBasicDescription:
+        mFormatID:
+            type: AudioFormat
+    AudioStreamPacketDescription: {}
+    SMPTETime:
+        mType:
+            type: SMPTETimeType
+        mFlags:
+            type: SMPTEStateFlags
+    AudioTimeStamp: {}
+    AudioClassDescription: {}
+    AudioChannelDescription:
+        mChannelFlags:
+            type: AudioChannelFlag
+    AudioChannelLayout:
+        mChannelBitmap:
+            type: AudioChannelBit
+
+protocols: {}
+
+functions:
+    # Make sure we don't miss any functions if new ones are introduced in a later version
+    (Audio.*):
+        class: CoreAudio
+        name: "Function__#{g[0]}"
+    (kAudio.*):
+        class: CoreAudio
+        name: "Function__#{g[0]}"
+
+values:   
+    # Make sure we don't miss any values if new ones are introduced in a later version
+    (Audio.*):
+        class: CoreAudio
+        name: "Value__#{g[0]}"
+    (kAudio.*):
+        class: CoreAudio
+        name: "Value__#{g[0]}"
+
+constants:
+    k(AudioUnitSampleFractionBits):
+        class: CoreAudio
+        name: "#{g[0]}"
+    k(AudioStreamAnyRate):
+        class: CoreAudio
+        name: "#{g[0]}"
+    k(AudioTimeStamp.*):
+        class: CoreAudio
+        name: "#{g[0]}"
+    k(AudioFormatFlag.*):
+        class: CoreAudio
+        name: "#{g[0]}"
+    k(LinearPCMFormatFlag.*):
+        class: CoreAudio
+        name: "#{g[0]}"
+    k(AppleLosslessFormatFlag.*):
+        class: CoreAudio
+        name: "#{g[0]}"
+    k(MPEG4Object.*):
+        class: CoreAudio
+        name: "#{g[0]}"
+    k(AudioChannelCoordinates.*):
+        class: CoreAudio
+        name: "#{g[0]}"
+
+    # Make sure we don't miss any constants if new ones are introduced in a later version
+    (Audio.*):
+        class: CoreAudio
+        name: "Constant__#{g[0]}"
+        
+    (kAudio.*):
+        class: CoreAudio
+        name: "Constant__#{g[0]}"

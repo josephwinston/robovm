@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -147,4 +147,8 @@ void Java_sun_misc_Unsafe_putOrderedLong(Env* env, Object* unsafe, Object* obj, 
 void Java_sun_misc_Unsafe_putOrderedObject(Env* env, Object* unsafe, Object* obj, jlong offset, Object* newValue) {
     // TODO: Java_sun_misc_Unsafe_putOrderedObject(...) calls Java_sun_misc_Unsafe_putObjectVolatile(...)
     Java_sun_misc_Unsafe_putObjectVolatile(env, unsafe, obj, offset, newValue);
+}
+
+Object* Java_sun_misc_Unsafe_allocateInstance(Env* env, Object* unsafe, Class* c) {
+  return rvmAllocateObject(env, c);
 }

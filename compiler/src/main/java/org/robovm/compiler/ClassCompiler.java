@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -16,7 +16,7 @@
  */
 package org.robovm.compiler;
 
-import static org.robovm.compiler.Bro.*;
+import static org.robovm.compiler.Annotations.*;
 import static org.robovm.compiler.Functions.*;
 import static org.robovm.compiler.Mangler.*;
 import static org.robovm.compiler.Types.*;
@@ -42,6 +42,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.robovm.compiler.clazz.Clazz;
 import org.robovm.compiler.clazz.ClazzInfo;
@@ -80,6 +81,7 @@ import org.robovm.compiler.llvm.StructureType;
 import org.robovm.compiler.llvm.Value;
 import org.robovm.compiler.llvm.Variable;
 import org.robovm.compiler.llvm.VariableRef;
+import org.robovm.compiler.plugin.CompilerPlugin;
 import org.robovm.compiler.trampoline.FieldAccessor;
 import org.robovm.compiler.trampoline.Invoke;
 import org.robovm.compiler.trampoline.LdcString;
@@ -195,8 +197,10 @@ public class ClassCompiler {
     private final Config config;
     private final MethodCompiler methodCompiler;
     private final BridgeMethodCompiler bridgeMethodCompiler;
+    private final CallbackMethodCompiler callbackMethodCompiler;
     private final NativeMethodCompiler nativeMethodCompiler;
     private final StructMemberMethodCompiler structMemberMethodCompiler;
+    private final GlobalValueMethodCompiler globalValueMethodCompiler;
     private final AttributesEncoder attributesEncoder;
     private final TrampolineCompiler trampolineResolver;
     
@@ -206,8 +210,10 @@ public class ClassCompiler {
         this.config = config;
         this.methodCompiler = new MethodCompiler(config);
         this.bridgeMethodCompiler = new BridgeMethodCompiler(config);
+        this.callbackMethodCompiler = new CallbackMethodCompiler(config);
         this.nativeMethodCompiler = new NativeMethodCompiler(config);
         this.structMemberMethodCompiler = new StructMemberMethodCompiler(config);
+        this.globalValueMethodCompiler = new GlobalValueMethodCompiler(config);
         this.attributesEncoder = new AttributesEncoder();
         this.trampolineResolver = new TrampolineCompiler(config);
     }
@@ -261,15 +267,6 @@ public class ClassCompiler {
     public void compile(Clazz clazz) throws IOException {
         reset();        
         
-//        File llFile = config.getLlFile(clazz);
-//        File bcFile = config.getBcFile(clazz);
-//        File sFile = config.getSFile(clazz);
-        File oFile = config.getOFile(clazz);
-//        llFile.getParentFile().mkdirs();
-//        bcFile.getParentFile().mkdirs();
-//        sFile.getParentFile().mkdirs();
-        oFile.getParentFile().mkdirs();
-
         Arch arch = config.getArch();
         OS os = config.getOs();
 
@@ -278,7 +275,6 @@ public class ClassCompiler {
             output.reset();
             compile(clazz, output);
         } catch (Throwable t) {
-//            FileUtils.deleteQuietly(llFile);
             if (t instanceof IOException) {
                 throw (IOException) t;
             }
@@ -288,15 +284,29 @@ public class ClassCompiler {
             throw new RuntimeException(t);
         }
 
+        byte[] llData = output.toByteArray();
+        
+        if (config.isDumpIntermediates()) {
+            File llFile = config.getLlFile(clazz);
+            llFile.getParentFile().mkdirs();
+            FileUtils.writeByteArrayToFile(llFile, llData);
+        }
+        
         Context context = new Context();
-        Module module = Module.parseIR(context, output.toByteArray(), clazz.getClassName());
+        Module module = Module.parseIR(context, llData, clazz.getClassName());
         PassManager passManager = createPassManager();
         passManager.run(module);
         passManager.dispose();
 
+        if (config.isDumpIntermediates()) {
+            File bcFile = config.getBcFile(clazz);
+            bcFile.getParentFile().mkdirs();
+            module.writeBitcode(bcFile);
+        }
+        
         String triple = config.getTriple();
         Target target = Target.lookupTarget(triple);
-        TargetMachine targetMachine = target.createTargetMachine(triple);
+        TargetMachine targetMachine = target.createTargetMachine(triple, "generic", null, null, null, null);
         targetMachine.setAsmVerbosityDefault(true);
         targetMachine.setFunctionSections(true);
         targetMachine.setDataSections(true);
@@ -312,6 +322,14 @@ public class ClassCompiler {
         patchAsmWithFunctionSizes(clazz, new ByteArrayInputStream(asm), output);
         asm = output.toByteArray();
 
+        if (config.isDumpIntermediates()) {
+            File sFile = config.getSFile(clazz);
+            sFile.getParentFile().mkdirs();
+            FileUtils.writeByteArrayToFile(sFile, asm);
+        }
+        
+        File oFile = config.getOFile(clazz);
+        oFile.getParentFile().mkdirs();
         BufferedOutputStream oOut = new BufferedOutputStream(new FileOutputStream(oFile));
         targetMachine.assemble(asm, clazz.getClassName(), oOut);
         oOut.close();
@@ -320,72 +338,79 @@ public class ClassCompiler {
     }
 
     private PassManager createPassManager() {
-        // Sets up the passes we would get with PassManagerBuilder (see PassManagerBuilder.cpp) at 
-        // O2 level except the TailCallEliminationPass which promotes all calls to tail calls which
-        // we don't want since it messes up stack traces.
-        
         PassManager passManager = new PassManager();
-        passManager.addAlwaysInlinerPass();
-        passManager.addPromoteMemoryToRegisterPass();
-
-        passManager.addTypeBasedAliasAnalysisPass();
-        passManager.addBasicAliasAnalysisPass();
-        passManager.addGlobalOptimizerPass();
-        passManager.addIPSCCPPass();
-        passManager.addDeadArgEliminationPass();
-        passManager.addInstructionCombiningPass();
-        passManager.addCFGSimplificationPass();
-        passManager.addPruneEHPass();
-        passManager.addFunctionInliningPass();
-        passManager.addFunctionAttrsPass();
-//        if (optLevel > 2) {
-//            passManager.addArgumentPromotionPass();
-//        }
-        passManager.addScalarReplAggregatesPass();
         
-        passManager.addEarlyCSEPass();
-        passManager.addSimplifyLibCallsPass();
-        passManager.addJumpThreadingPass();
-        passManager.addCorrelatedValuePropagationPass();
-        passManager.addCFGSimplificationPass();
-        passManager.addInstructionCombiningPass();
+        if (config.isDebug()) {
+            // Minimal passes. Just inline functions marked 'alwaysinline'.
+            passManager.addAlwaysInlinerPass();
+        } else {
+            // Sets up the passes we would get with PassManagerBuilder (see PassManagerBuilder.cpp) at 
+            // O2 level except the TailCallEliminationPass which promotes all calls to tail calls which
+            // we don't want since it messes up stack traces.
         
-        //passManager.addTailCallEliminationPass();
-        passManager.addCFGSimplificationPass();
-        passManager.addReassociatePass();
-        passManager.addCFGSimplificationPass();
-        passManager.addReassociatePass();
-        passManager.addLoopRotatePass();
-        passManager.addLICMPass();
-        passManager.addLoopUnswitchPass();
-        passManager.addInstructionCombiningPass();
-        passManager.addIndVarSimplifyPass();
-        passManager.addLoopIdiomPass();
-        passManager.addLoopDeletionPass();
+            passManager.addAlwaysInlinerPass();
+            passManager.addPromoteMemoryToRegisterPass();
+    
+            passManager.addTypeBasedAliasAnalysisPass();
+            passManager.addBasicAliasAnalysisPass();
+            passManager.addGlobalOptimizerPass();
+            passManager.addIPSCCPPass();
+            passManager.addDeadArgEliminationPass();
+            passManager.addInstructionCombiningPass();
+            passManager.addCFGSimplificationPass();
+            passManager.addPruneEHPass();
+            passManager.addFunctionInliningPass();
+            passManager.addFunctionAttrsPass();
+//            if (optLevel > 2) {
+//                passManager.addArgumentPromotionPass();
+//            }
+            passManager.addScalarReplAggregatesPass();
+            
+            passManager.addEarlyCSEPass();
+            passManager.addSimplifyLibCallsPass();
+            passManager.addJumpThreadingPass();
+            passManager.addCorrelatedValuePropagationPass();
+            passManager.addCFGSimplificationPass();
+            passManager.addInstructionCombiningPass();
+            
+            //passManager.addTailCallEliminationPass();
+            passManager.addCFGSimplificationPass();
+            passManager.addReassociatePass();
+            passManager.addCFGSimplificationPass();
+            passManager.addReassociatePass();
+            passManager.addLoopRotatePass();
+            passManager.addLICMPass();
+            passManager.addLoopUnswitchPass();
+            passManager.addInstructionCombiningPass();
+            passManager.addIndVarSimplifyPass();
+            passManager.addLoopIdiomPass();
+            passManager.addLoopDeletionPass();
+            
+            passManager.addLoopVectorizePass();
+            
+            passManager.addLoopUnrollPass();
+            
+            passManager.addGVNPass();
+            passManager.addMemCpyOptPass();
+            passManager.addSCCPPass();
+            
+            passManager.addInstructionCombiningPass();
+            passManager.addJumpThreadingPass();
+            passManager.addCorrelatedValuePropagationPass();
+            passManager.addDeadStoreEliminationPass();
+    
+            passManager.addSLPVectorizePass();
+            
+            passManager.addAggressiveDCEPass();
+            passManager.addCFGSimplificationPass();
+            passManager.addInstructionCombiningPass();
+    
+            passManager.addStripDeadPrototypesPass();
+    
+            passManager.addGlobalDCEPass();
+            passManager.addConstantMergePass();
+        }
         
-        passManager.addLoopVectorizePass();
-        
-        passManager.addLoopUnrollPass();
-        
-        passManager.addGVNPass();
-        passManager.addMemCpyOptPass();
-        passManager.addSCCPPass();
-        
-        passManager.addInstructionCombiningPass();
-        passManager.addJumpThreadingPass();
-        passManager.addCorrelatedValuePropagationPass();
-        passManager.addDeadStoreEliminationPass();
-
-        passManager.addSLPVectorizePass();
-        
-        passManager.addAggressiveDCEPass();
-        passManager.addCFGSimplificationPass();
-        passManager.addInstructionCombiningPass();
-
-        passManager.addStripDeadPrototypesPass();
-
-        passManager.addGlobalDCEPass();
-        passManager.addConstantMergePass();
         return passManager;
     }
     
@@ -486,8 +511,22 @@ public class ClassCompiler {
     }
     
     private void compile(Clazz clazz, OutputStream out) throws IOException {
-        sootClass = clazz.getSootClass();
+        methodCompiler.reset(clazz);
+        bridgeMethodCompiler.reset(clazz);
+        callbackMethodCompiler.reset(clazz);
+        nativeMethodCompiler.reset(clazz);
+        structMemberMethodCompiler.reset(clazz);
+        globalValueMethodCompiler.reset(clazz);
+        
+        ClazzInfo ci = clazz.resetClazzInfo();
+
         mb = new ModuleBuilder();
+        
+        for (CompilerPlugin compilerPlugin : config.getCompilerPlugins()) {
+            compilerPlugin.beforeClass(config, clazz, mb);
+        }
+        
+        sootClass = clazz.getSootClass();
         trampolines = new HashSet<Trampoline>();
         catches = new HashSet<String>();
         classFields = getClassFields(config.getOs(), config.getArch(),sootClass);
@@ -510,9 +549,6 @@ public class ClassCompiler {
         }
 
         if (isStruct(sootClass)) {
-            if (!Modifier.isFinal(sootClass.getModifiers())) {
-                throw new IllegalArgumentException("Struct class must be final");
-            }
             SootMethod _sizeOf = new SootMethod("_sizeOf", Collections.EMPTY_LIST, IntType.v(), Modifier.PROTECTED);
             sootClass.addMethod(_sizeOf);
             SootMethod sizeOf = new SootMethod("sizeOf", Collections.EMPTY_LIST, IntType.v(), Modifier.PUBLIC | Modifier.STATIC);
@@ -542,16 +578,27 @@ public class ClassCompiler {
         }
         
         for (SootMethod method : sootClass.getMethods()) {
+            
+            for (CompilerPlugin compilerPlugin : config.getCompilerPlugins()) {
+                compilerPlugin.beforeMethod(config, clazz, method, mb);
+            }
+            
             String name = method.getName();
-            if (isBridge(method)) {
-                bridgeMethod(method);
+            Function function = null;
+            if (hasBridgeAnnotation(method)) {
+                function = bridgeMethod(method);
+            } else if (hasGlobalValueAnnotation(method)) {
+                function = globalValueMethod(method);
             } else if (isStruct(sootClass) && ("_sizeOf".equals(name) 
-                        || "sizeOf".equals(name) || isStructMember(method))) {
-                structMember(method);
+                        || "sizeOf".equals(name) || hasStructMemberAnnotation(method))) {
+                function = structMember(method);
             } else if (method.isNative()) {
-                nativeMethod(method);
+                function = nativeMethod(method);
             } else if (!method.isAbstract()) {
-                method(method);
+                function = method(method);
+            }
+            if (hasCallbackAnnotation(method)) {
+                callbackMethod(method);
             }
             if (!name.equals("<clinit>") && !name.equals("<init>") 
                     && !method.isPrivate() && !method.isStatic() 
@@ -567,6 +614,12 @@ public class ClassCompiler {
                 }
                 FunctionRef fn = new FunctionRef(fnName, getFunctionType(method));
                 mb.addFunction(createClassInitWrapperFunction(fn));
+            }
+            
+            for (CompilerPlugin compilerPlugin : config.getCompilerPlugins()) {
+                if (function != null) {
+                    compilerPlugin.afterMethod(config, clazz, method, mb, function);
+                }
             }
         }
         
@@ -594,9 +647,11 @@ public class ClassCompiler {
         infoFn.add(new Ret(new ConstantBitcast(classInfoStruct.ref(), I8_PTR_PTR)));
         mb.addFunction(infoFn);
         
-        out.write(mb.build().toString().getBytes("UTF-8"));
+        for (CompilerPlugin compilerPlugin : config.getCompilerPlugins()) {
+            compilerPlugin.afterClass(config, clazz, mb);
+        }
         
-        ClazzInfo ci = clazz.resetClazzInfo();
+        out.write(mb.build().toString().getBytes("UTF-8"));
         
         ci.setCatchNames(catches);
         ci.setTrampolines(trampolines);
@@ -948,7 +1003,7 @@ public class ClassCompiler {
                 flags |= MI_VARARGS;
             }
             if (Modifier.isNative(m.getModifiers())) {
-                if (!isStruct(sootClass) && !isStructMember(m)) {
+                if (!isStruct(sootClass) && !hasStructMemberAnnotation(m)) {
                     flags |= MI_NATIVE;
                 }
             }
@@ -964,10 +1019,10 @@ public class ClassCompiler {
             if (attributesEncoder.methodHasAttributes(m)) {
                 flags |= MI_ATTRIBUTES;
             }
-            if (isBridge(m)) {
+            if (hasBridgeAnnotation(m) || hasGlobalValueAnnotation(m)) {
                 flags |= MI_BRO_BRIDGE;
             }
-            if (isCallback(m)) {
+            if (hasCallbackAnnotation(m)) {
                 flags |= MI_BRO_CALLBACK;
             }
             if ((t instanceof PrimType || t == VoidType.v()) && m.getParameterCount() == 0) {
@@ -1026,10 +1081,16 @@ public class ClassCompiler {
                     body.add(new ConstantBitcast(new FunctionRef(mangleMethod(m) + "_synchronized", getFunctionType(m)), I8_PTR));
                 }
             }
-            if (isBridge(m)) {
-                body.add(new GlobalRef(BridgeMethodCompiler.getTargetFnPtrName(m), I8_PTR));
+            if (hasBridgeAnnotation(m)) {
+                if (!readBooleanElem(getAnnotation(m, BRIDGE), "dynamic", false)) {
+                    body.add(new GlobalRef(BridgeMethodCompiler.getTargetFnPtrName(m), I8_PTR));
+                } else {
+                    body.add(new NullConstant(I8_PTR));
+                }
+            } else if (hasGlobalValueAnnotation(m)) {
+                body.add(new GlobalRef(GlobalValueMethodCompiler.getGlobalValuePtrName(m), I8_PTR));
             }
-            if (isCallback(m)) {
+            if (hasCallbackAnnotation(m)) {
                 body.add(new AliasRef(mangleMethod(m) + "_callback_i8p", I8_PTR));
             }
         }
@@ -1040,28 +1101,46 @@ public class ClassCompiler {
         return new StructureConstantBuilder().add(header.build()).add(body.build()).build();
     }
     
-    private void nativeMethod(SootMethod method) {
-        nativeMethodCompiler.compile(mb, method);
+    private Function nativeMethod(SootMethod method) {
+        Function fn = nativeMethodCompiler.compile(mb, method);
         trampolines.addAll(nativeMethodCompiler.getTrampolines());
         catches.addAll(nativeMethodCompiler.getCatches());
+        return fn;
     }
     
-    private void bridgeMethod(SootMethod method) {
-        bridgeMethodCompiler.compile(mb, method);
+    private Function bridgeMethod(SootMethod method) {
+        Function fn = bridgeMethodCompiler.compile(mb, method);
         trampolines.addAll(bridgeMethodCompiler.getTrampolines());
         catches.addAll(bridgeMethodCompiler.getCatches());
+        return fn;
     }
     
-    private void structMember(SootMethod method) {
-        structMemberMethodCompiler.compile(mb, method);
+    private Function callbackMethod(SootMethod method) {
+        Function fn = callbackMethodCompiler.compile(mb, method);
+        trampolines.addAll(callbackMethodCompiler.getTrampolines());
+        catches.addAll(callbackMethodCompiler.getCatches());
+        return fn;
+    }
+    
+    private Function structMember(SootMethod method) {
+        Function fn = structMemberMethodCompiler.compile(mb, method);
         trampolines.addAll(structMemberMethodCompiler.getTrampolines());
         catches.addAll(structMemberMethodCompiler.getCatches());
+        return fn;
     }
-    
-    private void method(SootMethod method) {
-        methodCompiler.compile(mb, method);
+
+    private Function globalValueMethod(SootMethod method) {
+        Function fn = globalValueMethodCompiler.compile(mb, method);
+        trampolines.addAll(globalValueMethodCompiler.getTrampolines());
+        catches.addAll(globalValueMethodCompiler.getCatches());
+        return fn;
+    }
+
+    private Function method(SootMethod method) {
+        Function fn = methodCompiler.compile(mb, method);
         trampolines.addAll(methodCompiler.getTrampolines());
         catches.addAll(methodCompiler.getCatches());
+        return fn;
     }
     
     private Function createAllocator() {

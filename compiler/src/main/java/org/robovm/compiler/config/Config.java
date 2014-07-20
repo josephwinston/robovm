@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -20,27 +20,41 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Reader;
 import java.io.Writer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.jar.Attributes;
 import java.util.jar.JarFile;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.robovm.compiler.ITable;
+import org.robovm.compiler.MarshalerLookup;
 import org.robovm.compiler.VTable;
 import org.robovm.compiler.Version;
 import org.robovm.compiler.clazz.Clazz;
 import org.robovm.compiler.clazz.Clazzes;
 import org.robovm.compiler.clazz.Path;
+import org.robovm.compiler.llvm.DataLayout;
 import org.robovm.compiler.log.Logger;
+import org.robovm.compiler.plugin.CompilerPlugin;
+import org.robovm.compiler.plugin.annotation.AnnotationImplPlugin;
+import org.robovm.compiler.plugin.objc.ObjCBlockPlugin;
+import org.robovm.compiler.plugin.objc.ObjCMemberPlugin;
+import org.robovm.compiler.plugin.objc.ObjCProtocolProxyPlugin;
 import org.robovm.compiler.target.ConsoleTarget;
 import org.robovm.compiler.target.Target;
 import org.robovm.compiler.target.ios.IOSTarget;
@@ -65,7 +79,7 @@ import org.simpleframework.xml.stream.OutputNode;
  */
 @Root
 public class Config {
-    
+
     public enum Cacerts { full };
     public enum TargetType { console, ios };
     
@@ -99,6 +113,8 @@ public class Config {
     private ArrayList<String> frameworks;
     @ElementList(required = false, entry = "framework")
     private ArrayList<String> weakFrameworks;
+    @ElementList(required = false, entry = "path")
+    private ArrayList<File> frameworkPaths;
     @ElementList(required = false, entry = "resource")
     private ArrayList<Resource> resources;
     @ElementList(required = false, entry = "classpathentry")
@@ -119,6 +135,8 @@ public class Config {
 
     private SigningIdentity iosSignIdentity;
     private ProvisioningProfile iosProvisioningProfile;
+
+    private boolean iosSkipSigning = false;
     
     private Target target = null;
     private Properties properties = new Properties();
@@ -128,10 +146,11 @@ public class Config {
     private File ccBinPath = null;
     
     private boolean clean = false;
-    private boolean debug = true;
+    private boolean debug = false;
     private boolean useDebugLibs = false;
     private boolean skipLinking = false;
     private boolean skipInstall = false;
+    private boolean dumpIntermediates = false;
     
     private File osArchDepLibDir;
     private File tmpDir;
@@ -140,8 +159,11 @@ public class Config {
     private ITable.Cache itableCache;
     private Logger logger = Logger.NULL_LOGGER;
     private List<Path> resourcesPaths = new ArrayList<Path>();
+    private DataLayout dataLayout;
+    private MarshalerLookup marshalerLookup;
+    private List<CompilerPlugin> compilerPlugins = new ArrayList<>();
 
-    Config() {
+    protected Config() {
     }
     
     public Home getHome() {
@@ -176,6 +198,10 @@ public class Config {
         return arch.getLlvmName() + "-unknown-" + os;
     }
     
+    public DataLayout getDataLayout() {
+        return dataLayout;
+    }
+    
     public boolean isClean() {
         return clean;
     }
@@ -186,6 +212,10 @@ public class Config {
 
     public boolean isUseDebugLibs() {
         return useDebugLibs;
+    }
+
+    public boolean isDumpIntermediates() {
+        return dumpIntermediates;
     }
     
     public boolean isSkipRuntimeLib() {
@@ -247,14 +277,9 @@ public class Config {
                 : Collections.unmodifiableList(exportedSymbols);
     }
     
-    public List<String> getLibs() {
-        List<String> result = new ArrayList<String>();
-        if (libs != null) {
-            for (Lib lib : libs) {
-                result.add(lib.getValue());
-            }
-        }
-        return Collections.unmodifiableList(result);
+    public List<Lib> getLibs() {
+        return libs == null ? Collections.<Lib>emptyList() 
+                : Collections.unmodifiableList(libs);
     }
     
     public List<String> getFrameworks() {
@@ -266,7 +291,12 @@ public class Config {
         return weakFrameworks == null ? Collections.<String>emptyList() 
                 : Collections.unmodifiableList(weakFrameworks);
     }
-    
+
+    public List<File> getFrameworkPaths() {
+        return frameworkPaths == null ? Collections.<File>emptyList() 
+                : Collections.unmodifiableList(frameworkPaths);
+    }
+
     public List<Resource> getResources() {
         return resources == null ? Collections.<Resource>emptyList() 
                 : Collections.unmodifiableList(resources);
@@ -286,6 +316,14 @@ public class Config {
     
     public ITable.Cache getITableCache() {
         return itableCache;
+    }
+    
+    public MarshalerLookup getMarshalerLookup() {
+        return marshalerLookup;
+    }
+    
+    public List<CompilerPlugin> getCompilerPlugins() {
+        return compilerPlugins;
     }
     
     public List<File> getBootclasspath() {
@@ -330,6 +368,10 @@ public class Config {
 
     public ProvisioningProfile getIosProvisioningProfile() {
         return iosProvisioningProfile;
+    }
+
+    public boolean isIosSkipSigning() {
+        return iosSkipSigning;
     }
     
     private static File makeFileRelativeTo(File dir, File f) {
@@ -387,6 +429,17 @@ public class Config {
         }
     }
     
+    /**
+     * Returns the directory where generated classes are stored for the specified
+     * {@link Path}. Generated classes are stored in the cache directory in a dir
+     * at the same level as the cache dir for the {@link Path} with 
+     * <code>.generated</code> appended to the dir name.
+     */
+    public File getGeneratedClassDir(Path path) {
+        File pathCacheDir = getCacheDir(path);
+        return new File(pathCacheDir.getParentFile(), pathCacheDir.getName() + ".generated");
+    }
+    
     private static Map<Object, Object> getManifestAttributes(File jarFile) throws IOException {
         JarFile jf = null;
         try {
@@ -403,6 +456,99 @@ public class Config {
 
     private static String getMainClass(File jarFile) throws IOException {
         return (String) getManifestAttributes(jarFile).get(Attributes.Name.MAIN_CLASS);
+    }
+    
+    private File extractIfNeeded(Path path) throws IOException {
+        if (path.getFile().isFile()) {
+            File pathCacheDir = getCacheDir(path);
+            File target = new File(pathCacheDir.getParentFile(), pathCacheDir.getName() + ".extracted");
+            
+            if (!target.exists() || path.getFile().lastModified() > target.lastModified()) {
+                FileUtils.deleteDirectory(target);
+                target.mkdirs();
+                try (ZipFile zipFile = new ZipFile(path.getFile())) {
+                    Enumeration<? extends ZipEntry> entries = zipFile.entries();
+                    while (entries.hasMoreElements()) {
+                        ZipEntry entry = entries.nextElement();
+                        if (entry.getName().startsWith("META-INF/robovm/") && !entry.isDirectory()) {
+                            File f = new File(target, entry.getName());
+                            f.getParentFile().mkdirs();
+                            try (InputStream in = zipFile.getInputStream(entry); 
+                                 OutputStream out = new FileOutputStream(f)) {
+                                
+                                IOUtils.copy(in, out);
+                                if (entry.getTime() != -1) {
+                                    f.setLastModified(entry.getTime());
+                                }
+                            }
+                        }
+                    }
+                }
+                target.setLastModified(path.getFile().lastModified());
+            }
+            
+            return target;
+        } else {
+            return path.getFile();
+        }
+    }
+    
+    private <T> ArrayList<T> mergeLists(ArrayList<T> from, ArrayList<T> to) {
+        if (from == null) {
+            return to;
+        }
+        to = to != null ? to : new ArrayList<T>();
+        for (T o : from) {
+            if (!to.contains(o)) {
+                to.add(o);
+            }
+        }
+        return to;
+    }
+    
+    private void mergeConfig(Config from, Config to) {
+        to.exportedSymbols = mergeLists(from.exportedSymbols, to.exportedSymbols);
+        to.forceLinkClasses = mergeLists(from.forceLinkClasses, to.forceLinkClasses);
+        to.frameworkPaths = mergeLists(from.frameworkPaths, to.frameworkPaths);
+        to.frameworks = mergeLists(from.frameworks, to.frameworks);
+        to.libs = mergeLists(from.libs, to.libs);
+        to.resources = mergeLists(from.resources, to.resources);
+        to.weakFrameworks = mergeLists(from.weakFrameworks, to.weakFrameworks);
+    }
+    
+    private void mergeConfigsFromClasspath() throws IOException {
+        List<String> dirs = Arrays.asList(
+                "META-INF/robovm/" + os + "/" + arch, 
+                "META-INF/robovm/" + os);
+
+        // The algorithm below preserves the order of config data from the
+        // classpath. Last the config from this object is added.
+        
+        // First merge all configs on the classpath to an empty Config
+        Config config = new Config();
+        for (Path path : clazzes.getPaths()) {
+            for (String dir : dirs) {
+                if (path.contains(dir + "/robovm.xml")) {
+                    File configXml = new File(new File(extractIfNeeded(path), dir), "robovm.xml");
+                    Builder builder = new Builder();
+                    builder.read(configXml);
+                    mergeConfig(builder.config, config);
+                    break;
+                }
+            }
+        }
+        
+        // Then merge with this Config
+        mergeConfig(this, config);
+        
+        // Copy back to this Config
+        this.exportedSymbols = config.exportedSymbols;
+        this.forceLinkClasses = config.forceLinkClasses;
+        this.frameworkPaths = config.frameworkPaths;
+        this.frameworks = config.frameworks;
+        this.libs = config.libs;
+        this.resources = config.resources;
+        this.weakFrameworks = config.weakFrameworks;
     }
     
     private Config build() throws IOException {
@@ -444,9 +590,9 @@ public class Config {
             realBootclasspath.add(0, home.rtPath);
         }
 
-        this.clazzes = new Clazzes(this, realBootclasspath, classpath);
         this.vtableCache = new VTable.Cache();
         this.itableCache = new ITable.Cache();
+        this.marshalerLookup = new MarshalerLookup(this);
         
         if (!skipInstall) {
             if (installDir == null) {
@@ -471,14 +617,27 @@ public class Config {
         
         os = target.getOs();
         arch = target.getArch();
+        dataLayout = new DataLayout(getTriple());
         
         osArchDepLibDir = new File(new File(home.libVmDir, os.toString()), 
                 arch.toString());
         
         File osDir = new File(cacheDir, os.toString());
         File archDir = new File(osDir, arch.toString());
-        cacheDir = new File(archDir, "default");
+        cacheDir = new File(archDir, debug ? "debug" : "release");
         cacheDir.mkdirs();
+
+        this.clazzes = new Clazzes(this, realBootclasspath, classpath);
+
+        // Add standard plugins
+        compilerPlugins.addAll(0, Arrays.asList(
+            new ObjCProtocolProxyPlugin(),
+            new ObjCBlockPlugin(),
+            new ObjCMemberPlugin(),
+            new AnnotationImplPlugin()
+        ));
+
+        mergeConfigsFromClasspath();
         
         return this;
     }
@@ -491,7 +650,13 @@ public class Config {
         private boolean dev = false;
 
         public Home(File homeDir) {
-            validate(homeDir);
+            this(homeDir, true);
+        }
+        
+        protected Home(File homeDir, boolean validate) {
+            if (validate) {
+                validate(homeDir);
+            }
             binDir = new File(homeDir, "bin");
             libVmDir = new File(homeDir, "lib/vm");
             rtPath = new File(homeDir, "lib/robovm-rt.jar");
@@ -734,6 +899,11 @@ public class Config {
             return this;
         }
         
+        public Builder dumpIntermediates(boolean b) {
+            config.dumpIntermediates = b;
+            return this;
+        }
+        
         public Builder skipRuntimeLib(boolean b) {
             config.skipRuntimeLib = b;
             return this;
@@ -806,11 +976,11 @@ public class Config {
             return this;
         }
 
-        public Builder addLib(String lib) {
+        public Builder addLib(Lib lib) {
             if (config.libs == null) {
                 config.libs = new ArrayList<Lib>();
             }
-            config.libs.add(new Lib(lib));
+            config.libs.add(lib);
             return this;
         }
         
@@ -841,6 +1011,21 @@ public class Config {
                 config.weakFrameworks = new ArrayList<String>();
             }
             config.weakFrameworks.add(framework);
+            return this;
+        }
+
+        public Builder clearFrameworkPaths() {
+            if (config.frameworkPaths != null) {
+                config.frameworkPaths.clear();
+            }
+            return this;
+        }
+        
+        public Builder addFrameworkPath(File frameworkPath) {
+            if (config.frameworkPaths == null) {
+                config.frameworkPaths = new ArrayList<File>();
+            }
+            config.frameworkPaths.add(frameworkPath);
             return this;
         }
 
@@ -927,11 +1112,21 @@ public class Config {
             return this;
         }
 
+        public Builder iosSkipSigning(boolean b) {
+            config.iosSkipSigning = b;
+            return this;
+        }
+
+        public Builder addCompilerPlugin(CompilerPlugin compilerPlugin) {
+            config.compilerPlugins.add(compilerPlugin);
+            return this;
+        }
+        
         public Config build() throws IOException {
             return config.build();
         }
         
-        public void read(File file) throws Exception {
+        public void read(File file) throws IOException {
             Reader reader = null;
             try {
                 reader = new InputStreamReader(new FileInputStream(file), "utf-8");
@@ -941,9 +1136,17 @@ public class Config {
             }
         }
         
-        public void read(Reader reader, File wd) throws Exception {
-            Serializer serializer = createSerializer(wd);
-            serializer.read(config, reader);
+        public void read(Reader reader, File wd) throws IOException {
+            try {
+                Serializer serializer = createSerializer(wd);
+                serializer.read(config, reader);
+            } catch (IOException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw (IOException) new IOException().initCause(e);
+            }
             // <roots> was renamed to <forceLinkClasses> but we still support <roots>. We need to
             // copy <roots> to <forceLinkClasses> and set <roots> to null.
             if (config.roots != null && !config.roots.isEmpty()) {
@@ -955,7 +1158,7 @@ public class Config {
             }
         }
         
-        public void write(File file) throws Exception {
+        public void write(File file) throws IOException {
             Writer writer = null;
             try {
                 writer = new OutputStreamWriter(new FileOutputStream(file), "utf-8");
@@ -965,9 +1168,17 @@ public class Config {
             }
         }
         
-        public void write(Writer writer, File wd) throws Exception {
-            Serializer serializer = createSerializer(wd);
-            serializer.write(config, writer);
+        public void write(Writer writer, File wd) throws IOException {
+            try {
+                Serializer serializer = createSerializer(wd);
+                serializer.write(config, writer);
+            } catch (IOException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw (IOException) new IOException().initCause(e);
+            }
         }
 
         private Serializer createSerializer(final File wd) throws Exception {
@@ -991,15 +1202,60 @@ public class Config {
         }
     }
 
-    private static final class Lib {
+    public static final class Lib {
         private final String value;
+        private final boolean force;
 
-        public Lib(String value) {
+        public Lib(String value, boolean force) {
             this.value = value;
+            this.force = force;
         }
         
         public String getValue() {
             return value;
+        }
+        
+        public boolean isForce() {
+            return force;
+        }
+
+        @Override
+        public String toString() {
+            return "Lib [value=" + value + ", force=" + force + "]";
+        }
+
+        @Override
+        public int hashCode() {
+            final int prime = 31;
+            int result = 1;
+            result = prime * result + (force ? 1231 : 1237);
+            result = prime * result + ((value == null) ? 0 : value.hashCode());
+            return result;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (this == obj) {
+                return true;
+            }
+            if (obj == null) {
+                return false;
+            }
+            if (getClass() != obj.getClass()) {
+                return false;
+            }
+            Lib other = (Lib) obj;
+            if (force != other.force) {
+                return false;
+            }
+            if (value == null) {
+                if (other.value != null) {
+                    return false;
+                }
+            } else if (!value.equals(other.value)) {
+                return false;
+            }
+            return true;
         }
     }
     
@@ -1016,20 +1272,26 @@ public class Config {
             if (value == null) {
                 return null;
             }
+            InputNode forceNode = node.getAttribute("force");
+            boolean force = forceNode == null || Boolean.valueOf(forceNode.getValue());
             if (value.endsWith(".a") || value.endsWith(".o")) {
-                return new Lib(fileConverter.read(value).getAbsolutePath());
+                return new Lib(fileConverter.read(value).getAbsolutePath(), force);
             } else {
-                return new Lib(value);
+                return new Lib(value, force);
             }
         }
 
         @Override
         public void write(OutputNode node, Lib lib) throws Exception {
             String value = lib.getValue();
+            boolean force = lib.isForce();
             if (value.endsWith(".a") || value.endsWith(".o")) {
                 fileConverter.write(node, new File(value));
             } else {
                 node.setValue(value);
+            }
+            if (!force) {
+                node.setAttribute("force", "false");
             }
         }
     }

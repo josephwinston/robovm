@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Trillian AB
+ * Copyright (C) 2013 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -114,7 +114,7 @@ public class IDevice implements AutoCloseable {
     }
     
     @Override
-    public void close() throws Exception {
+    public void close() {
         dispose();
     }
 

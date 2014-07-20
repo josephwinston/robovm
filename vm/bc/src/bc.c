@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@ typedef struct {
 
 const char* __attribute__ ((weak)) _bcMainClass = NULL;
 extern jboolean _bcDynamicJNI;
+extern char** _bcStaticLibs;
 extern char** _bcBootclasspath;
 extern char** _bcClasspath;
 extern void* _bcBootClassesHash;
@@ -54,6 +55,8 @@ static Method* loadMethods(Env*, Class*);
 static Class* findClassAt(Env*, void*);
 static Class* createClass(Env*, ClassInfoHeader*, ClassLoader*);
 static jboolean exceptionMatch(Env* env, TrycatchContext*);
+static ObjectArray* listBootClasses(Env*, Class*);
+static ObjectArray* listUserClasses(Env*, Class*);
 static Options options = {0};
 static VM* vm = NULL;
 static jint addressClassLookupsCount = 0;
@@ -72,6 +75,9 @@ int main(int argc, char* argv[]) {
     options.findClassAt = findClassAt;
     options.exceptionMatch = exceptionMatch;
     options.dynamicJNI = _bcDynamicJNI;
+    options.staticLibs = _bcStaticLibs;
+    options.listBootClasses = listBootClasses;
+    options.listUserClasses = listUserClasses;
     if (!rvmInitOptions(argc, argv, &options, FALSE)) {
         fprintf(stderr, "rvmInitOptions(...) failed!\n");
         return 1;
@@ -89,7 +95,7 @@ int main(int argc, char* argv[]) {
 
 static ClassInfoHeader** getClassInfosBase(void* hash) {
     hash += sizeof(jint); // Skip count
-    jint size = ((jshort*) hash)[0];
+    jint size = ((uint16_t*) hash)[0];
 #ifdef _LP64
     ClassInfoHeader** base  = hash + (size << 1) + 4;
 #else
@@ -107,10 +113,10 @@ static ClassInfoHeader* lookupClassInfo(Env* env, const char* className, void* h
     jint h = 0;
     MurmurHash3_x86_32(className, strlen(className) + 1, 0x1ce79e5c, &h);
     hash += sizeof(jint); // Skip count
-    jint size = ((jshort*) hash)[0];
+    jint size = ((uint16_t*) hash)[0];
     h &= size - 1;
-    jint start = ((jshort*) hash)[h + 1];
-    jint end = ((jshort*) hash)[h + 1 + 1];
+    jint start = ((uint16_t*) hash)[h + 1];
+    jint end = ((uint16_t*) hash)[h + 1 + 1];
     jint i;
     for (i = start; i < end; i++) {
         ClassInfoHeader* header = base[i];
@@ -143,6 +149,58 @@ static void iterateClassInfos(Env* env, jboolean (*callback)(Env*, ClassInfoHead
             }
         }
     }
+}
+
+static ObjectArray* listClasses(Env* env, Class* instanceofClazz, ClassLoader* classLoader, void* hash) {
+    if (instanceofClazz && (CLASS_IS_ARRAY(instanceofClazz) || CLASS_IS_PRIMITIVE(instanceofClazz))) {
+        return NULL;
+    }
+    ClassInfoHeader** base = getClassInfosBase(hash);
+    jint count = getClassInfosCount(hash);
+    jint i = 0;
+    jint matches = count;
+    TypeInfo* instanceofTypeInfo = instanceofClazz ? instanceofClazz->typeInfo : NULL;
+    if (instanceofTypeInfo) {
+        matches = 0;
+        for (i = 0; i < count; i++) {
+            ClassInfoHeader* header = base[i];
+            if ((header->flags & CI_ERROR) == 0) {
+                if ((!CLASS_IS_INTERFACE(instanceofClazz) 
+                    && rvmIsClassTypeInfoAssignable(env, header->typeInfo, instanceofTypeInfo))
+                    || (CLASS_IS_INTERFACE(instanceofClazz) 
+                    && rvmIsInterfaceTypeInfoAssignable(env, header->typeInfo, instanceofTypeInfo))) {
+
+                    matches++;
+                }
+            }
+        }
+    }
+
+    if (matches == 0) return NULL;
+    ObjectArray* result = rvmNewObjectArray(env, matches, java_lang_Class, NULL, NULL);
+    if (!result) return NULL;
+
+    jint j = 0;
+    for (i = 0; i < count; i++) {
+        ClassInfoHeader* header = base[i];
+        if ((header->flags & CI_ERROR) == 0) {
+            if (!instanceofTypeInfo || ((!CLASS_IS_INTERFACE(instanceofClazz) 
+                && rvmIsClassTypeInfoAssignable(env, header->typeInfo, instanceofTypeInfo))
+                || (CLASS_IS_INTERFACE(instanceofClazz) 
+                && rvmIsInterfaceTypeInfoAssignable(env, header->typeInfo, instanceofTypeInfo)))) {
+
+                result->values[j++] = (Object*) (header->clazz ? header->clazz : createClass(env, header, classLoader));
+                if (rvmExceptionOccurred(env)) return NULL;
+            }
+        }
+    }
+    return result;
+}
+static ObjectArray* listBootClasses(Env* env, Class* instanceofClazz) {
+    return listClasses(env, instanceofClazz, NULL, _bcBootClassesHash);
+}
+static ObjectArray* listUserClasses(Env* env, Class* instanceofClazz) {
+    return listClasses(env, instanceofClazz, systemClassLoader, _bcClassesHash);
 }
 
 static Class* loadClass(Env* env, const char* className, ClassLoader* classLoader, void* hash) {
@@ -212,15 +270,22 @@ static Class* createClass(Env* env, ClassInfoHeader* header, ClassLoader* classL
         if (!superclass) return NULL;
     }
 
+    rvmObtainClassLock(env);
+
     Class* clazz = rvmAllocateClass(env, header->className, superclass, classLoader, ci.access, header->typeInfo, header->vitable, header->itables,
             header->classDataSize, header->instanceDataSize, header->instanceDataOffset, header->classRefCount, 
             header->instanceRefCount, ci.attributes, header->initializer);
 
     if (clazz) {
-        if (!rvmRegisterClass(env, clazz)) return NULL;
+        if (!rvmRegisterClass(env, clazz)) {
+            rvmReleaseClassLock(env);
+            return NULL;
+        }
         header->clazz = clazz;
     }
 
+    rvmReleaseClassLock(env);
+    
     return clazz;
 }
 
@@ -899,4 +964,10 @@ Env* _bcAttachThreadFromCallback(void) {
 
 void _bcDetachThreadFromCallback(Env* env) {
     rvmDetachCurrentThread(env->vm, FALSE, TRUE);
+}
+
+void* _bcCopyStruct(Env* env, void* src, jint size) {
+    ENTER;
+    void* result = rvmCopyMemory(env, src, size);
+    LEAVE(result);
 }

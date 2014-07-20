@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,8 @@ import java.util.List;
 
 import org.robovm.rt.VM;
 import org.robovm.rt.bro.annotation.Marshaler;
-import org.robovm.rt.bro.annotation.Pointer;
-import org.robovm.rt.bro.ptr.Ptr;
-import org.robovm.rt.bro.ptr.Ptr.MarshalerCallback;
+import org.robovm.rt.bro.annotation.MarshalsArray;
+import org.robovm.rt.bro.annotation.MarshalsPointer;
 
 /**
  *
@@ -36,7 +35,11 @@ public abstract class Struct<T extends Struct<T>> extends NativeObject implement
     protected Struct() {
         setHandle(VM.allocateMemory(_sizeOf()));
     }
-    
+
+    protected Struct(long handle) {
+        setHandle(handle);
+    }
+
     public T copy() {
         return copy(1);
     }
@@ -68,30 +71,6 @@ public abstract class Struct<T extends Struct<T>> extends NativeObject implement
      */
     public <U extends Struct<U>> U as(Class<U> type) {
         return Struct.toStruct(type, getHandle());
-    }
-    
-    /**
-     * Casts this {@link Struct} to a {@link Ptr} pointing to the specified 
-     * target type.
-     * 
-     * @param type the target type.
-     * @return a {@link Ptr} that points to the same memory 
-     *         location as this {@link Struct}.
-     */
-    public <U extends Struct<U>> Ptr<U> asPtr(Class<U> type) {
-        return Ptr.toPtr(type, getHandle());
-    }
-    
-    /**
-     * Casts this {@link Struct} to a {@link Ptr} pointing to a {@link Ptr} 
-     * pointing to the specified target type.
-     * 
-     * @param type the target type.
-     * @return a {@link Ptr} that points to the same memory 
-     *         location as this {@link Struct}.
-     */
-    public <U extends Struct<U>> Ptr<Ptr<U>> asPtrPtr(Class<U> type) {
-        return Ptr.toPtrPtr(type, getHandle());
     }
     
     protected int _sizeOf() {
@@ -135,7 +114,11 @@ public abstract class Struct<T extends Struct<T>> extends NativeObject implement
         return next(1);
     }
     
+    @SuppressWarnings("unchecked")
     public T next(long delta) {
+        if (delta == 0) {
+            return (T) this;
+        }
         return wrap(getHandle() + _sizeOf() * delta);
     }
 
@@ -156,6 +139,82 @@ public abstract class Struct<T extends Struct<T>> extends NativeObject implement
         return array;
     }
 
+    /**
+     * Updates the memory starting at this {@link Struct} with the 
+     * {@link Struct} starting at the specified instance.
+     * 
+     * @param o the {@link Struct} to write to the address of this 
+     *        {@link Struct}.
+     * @throws NullPointerException if {@code o} is {@code null}.
+     * @throws IllegalArgumentException if the class of {@code o} is not the 
+     *         same as this {@link Struct}'s class.
+     */
+    public void update(T o) {
+        update(o, 1);
+    }
+    
+    /**
+     * Updates the memory starting at this {@link Struct} with the 
+     * {@link Struct}s starting at the specified instance.
+     * 
+     * @param o the first {@link Struct} to write to the address of this 
+     *        {@link Struct}.
+     * @param n the number of {@link Struct}s to write.
+     * @throws NullPointerException if {@code o} is {@code null}.
+     * @throws IllegalArgumentException if the class of {@code o} is not the 
+     *         same as this {@link Struct}'s class.
+     */
+    public void update(T o, int n) {
+        if (o == null) {
+            throw new NullPointerException("o");
+        }
+        if (o.getClass() != this.getClass()) {
+            throw new IllegalArgumentException("Expected an instance of " 
+                    + this.getClass().getName() + ". Actual type: " 
+                    + o.getClass().getName());
+        }
+        if (n < 1) {
+            throw new IllegalArgumentException("n < 1");
+        }
+        VM.memcpy(getHandle(), o.getHandle(), _sizeOf() * n);
+    }
+    
+    
+    /**
+     * Updates the memory starting at this {@link Struct} with the 
+     * {@link Struct}s in the specified array.
+     * 
+     * @param array the array of {@link Struct}s to write.
+     * @throws NullPointerException if {@code array} or any of the objects in 
+     *         {@code array} are {@code null}.
+     * @throws IllegalArgumentException if the class of any of the objects in 
+     *         the array is not the same as this {@link Struct}'s class.
+     */
+    public void update(T[] array) {
+        if (array == null) {
+            throw new NullPointerException("array");
+        }
+        Class<?> cls = this.getClass();
+        int len = array.length;
+        for (int i = 0; i < len; i++) {
+            T o = array[i];
+            if (o == null) {
+                throw new NullPointerException("null at index " + i);
+            }
+            if (o.getClass() != cls) {
+                throw new IllegalArgumentException("Expected an instance of " 
+                        + cls.getName() + " at index " + i + ". Actual type: " 
+                        + o.getClass().getName());
+            }
+        }
+        long dst = getHandle();
+        int size = _sizeOf();
+        for (int i = 0; i < len; i++) {
+            VM.memcpy(dst, array[i].getHandle(), size);
+            dst += size;
+        }
+    }
+    
     public List<T> toList(int n) {
         List<T> l = new ArrayList<T>(n);
         for (int i = 0; i < n; i++) {
@@ -210,44 +269,140 @@ public abstract class Struct<T extends Struct<T>> extends NativeObject implement
     }
     
     public static class Marshaler {
-        @SuppressWarnings("rawtypes")
-        public static final MarshalerCallback MARSHALER_CALLBACK = new MarshalerCallback() {
-            @SuppressWarnings("unchecked")
-            public NativeObject toObject(Class cls, long handle) {
-                return Struct.toStruct(cls, handle);
-            }
-        };
-        
-        @SuppressWarnings({ "rawtypes", "unchecked" })
-        public static Object toObject(Class cls, long handle, boolean copy) {
-            Struct o = Struct.toStruct(cls, handle);
-            if (copy) {
-                o = o.copy();
-            }
-            return o;
+        @MarshalsPointer
+        public static <T extends Struct<T>> T toObject(Class<T> cls, long handle, long flags) {
+            return Struct.toStruct(cls, handle);
         }
-
-        public static void updateObject(Object o, long handle) {
-        }
-        
-        @SuppressWarnings("rawtypes")
-        public static Ptr toPtr(Class cls, long handle, int wrapCount) {
-            return Ptr.toPtr(cls, handle, wrapCount, MARSHALER_CALLBACK);
-        }
-        
-        @SuppressWarnings("rawtypes")
-        public static void updatePtr(Ptr ptr, Class cls, long handle, int wrapCount) {
-            Ptr.updatePtr(ptr, cls, wrapCount, MARSHALER_CALLBACK);
-        }
-        
-        public static @Pointer long toNative(Object o) {
+        @MarshalsPointer
+        public static long toNative(Struct<?> o, long flags) {
             if (o == null) {
                 return 0L;
             }
-            return ((Struct<?>) o).getHandle();
+            return o.getHandle();
+        }
+
+        @MarshalsArray
+        public static <T extends Struct<T>> T toObject(Class<T> cls, long handle, long flags, int d1) {
+            T s = Struct.toStruct(cls, handle);
+            return s;
+        }
+        @MarshalsArray
+        public static <T extends Struct<T>> void toNative(T o, long handle, long flags, int d1) {
+            if (o.getHandle() == handle) {
+                return;
+            }
+            VM.memcpy(handle, o.getHandle(), d1 * o._sizeOf());
+        }
+        @MarshalsArray
+        public static <T extends Struct<T>> T toObject(Class<T> cls, long handle, long flags, int d1, int d2) {
+            T s = Struct.toStruct(cls, handle);
+            return s;
+        }
+        @MarshalsArray
+        public static <T extends Struct<T>> void toNative(T o, long handle, long flags, int d1, int d2) {
+            toNative(o, handle, flags, d1 * d2);
+        }
+        @MarshalsArray
+        public static <T extends Struct<T>> T toObject(Class<T> cls, long handle, long flags, int d1, int d2, int d3) {
+            T s = Struct.toStruct(cls, handle);
+            return s;
+        }
+        @MarshalsArray
+        public static <T extends Struct<T>> void toNative(T o, long handle, long flags, int d1, int d2, int d3) {
+            toNative(o, handle, flags, d1 * d2 * d3);
+        }
+
+        private static void checkDimensions(Class<?> baseType, String format, int actual, int expected) {
+            if (actual != expected) {
+                String suffixActual = String.format(format, actual);
+                String suffixExpected = String.format(format, expected);
+                throw new IllegalArgumentException(
+                        "Expected " + baseType.getName() + suffixExpected 
+                        + ". Got " + baseType.getName() + suffixActual);
+            }
         }
         
-        public static void updateNative(Object o, long handle) {
+        @MarshalsArray
+        @SuppressWarnings("unchecked")
+        public static <T extends Struct<T>> T[] array1DToObject(Class<T[]> arrayClass, long handle, long flags, int d1) {
+            T s = Struct.toStruct((Class<T>) arrayClass.getComponentType(), handle);
+            return s.toArray(d1);
+        }
+        @MarshalsArray
+        @SuppressWarnings("unchecked")
+        public static <T extends Struct<T>> void array1DToNative(T[] o, long handle, long flags, int d1) {
+            Class<T> structClass = (Class<T>) o.getClass().getComponentType();
+            checkDimensions(structClass, "[%d]", o.length, d1);
+            Struct<T> s = Struct.toStruct((Class<T>) structClass, handle);
+            s.update(o);
+        }
+        @MarshalsArray
+        @SuppressWarnings("unchecked")
+        public static <T extends Struct<T>> T[][] array2DToObject(Class<T[][]> arrayClass, long handle, long flags, int d1, int d2) {
+            Class<T> structClass = (Class<T>) arrayClass.getComponentType().getComponentType();
+            T[][] o = (T[][]) Array.newInstance(structClass, d1, d2);
+            T s = Struct.toStruct((Class<T>) structClass, handle);
+            int len1 = o.length;
+            for (int i = 0; i < len1; i++) {
+                o[i] = s.toArray(d2);
+                s = s.next(d2);
+            }
+            return o;
+        }
+        @MarshalsArray
+        @SuppressWarnings("unchecked")
+        public static <T extends Struct<T>> void array2DToNative(T[][] o, long handle, long flags, int d1, int d2) {
+            Class<T> structClass = (Class<T>) o.getClass().getComponentType().getComponentType();
+            checkDimensions(structClass, "[%d][]", o.length, d1);
+            int len1 = o.length;
+            for (int i = 0; i < len1; i++) {
+                checkDimensions(structClass, "[][%d]", o[i].length, d2);
+            }
+            Struct<T> s = Struct.toStruct((Class<T>) structClass, handle);
+            for (int i = 0; i < len1; i++) {
+                s.update(o[i]);
+                s = s.next(d2);
+            }
+        }
+        @MarshalsArray
+        @SuppressWarnings("unchecked")
+        public static <T extends Struct<T>> T[][][] array3DToObject(Class<T[][][]> arrayClass, long handle, long flags, int d1, int d2, int d3) {
+            Class<T> structClass = (Class<T>) arrayClass.getComponentType().getComponentType().getComponentType();
+            T[][][] o = (T[][][]) Array.newInstance(structClass, d1, d2, d3);
+            T s = Struct.toStruct((Class<T>) structClass, handle);
+            int len1 = o.length;
+            for (int i = 0; i < len1; i++) {
+                int len2 = o[i].length;
+                for (int j = 0; j < len2; j++) {
+                    o[i][j] = s.toArray(d3);
+                    s = s.next(d3);
+                }
+            }
+            return o;
+        }
+        @MarshalsArray
+        @SuppressWarnings("unchecked")
+        public static <T extends Struct<T>> void array3DToNative(T[][][] o, long handle, long flags, int d1, int d2, int d3) {
+            Class<T> structClass = (Class<T>) o.getClass().getComponentType().getComponentType().getComponentType();
+            checkDimensions(structClass, "[%d][][]", o.length, d1);
+            int len1 = o.length;
+            for (int i = 0; i < len1; i++) {
+                T[][] p = o[i];
+                checkDimensions(structClass, "[][%d][]", p.length, d2);
+                int len2 = p.length;
+                for (int j = 0; j < len2; j++) {
+                    checkDimensions(structClass, "[][][%d]", p[j].length, d3);
+                }
+            }
+            Struct<T> s = Struct.toStruct((Class<T>) structClass, handle);
+            for (int i = 0; i < len1; i++) {
+                T[][] p = o[i];
+                int len2 = p.length;
+                for (int j = 0; j < len2; j++) {
+                    s.update(o[i][j]);
+                    s = s.next(d3);
+                }
+            }
         }
     }
     

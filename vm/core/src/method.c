@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -81,10 +81,10 @@ static Method* getMethod(Env* env, Class* clazz, const char* name, const char* d
      * TODO: Should we really do this? Does the JNI GetMethodID() function do this?
      */
     for (c = clazz; c != NULL; c = c->superclass) {
-        Interface* interface = rvmGetInterfaces(env, c);
+        Interface* interfaze = rvmGetInterfaces(env, c);
         if (rvmExceptionCheck(env)) return NULL;
-        for (; interface != NULL; interface = interface->next) {
-            Method* method = getMethod(env, interface->interface, name, desc);
+        for (; interfaze != NULL; interfaze = interfaze->next) {
+            Method* method = getMethod(env, interfaze->interfaze, name, desc);
             if (rvmExceptionCheck(env)) return NULL;
             if (method) return method;
         }
@@ -1344,9 +1344,9 @@ void* rvmResolveNativeMethodImpl(Env* env, NativeMethod* method, const char* sho
         f = rvmFindDynamicLibSymbol(env, nativeLibs, shortMangledName, TRUE);
         if (f) {
             TRACEF("Found native method using short name: %s", shortMangledName);
-        } else if (!strcmp(shortMangledName, longMangledName)) {
+        } else if (strcmp(shortMangledName, longMangledName)) {
             TRACEF("Searching for native method using long name: %s", longMangledName);
-            void* f = rvmFindDynamicLibSymbol(env, nativeLibs, longMangledName, TRUE);
+            f = rvmFindDynamicLibSymbol(env, nativeLibs, longMangledName, TRUE);
             if (f) {
                 TRACEF("Found native method using long name: %s", longMangledName);
             }

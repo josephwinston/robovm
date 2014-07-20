@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,11 +25,9 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Enumeration;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -41,7 +39,6 @@ import org.robovm.compiler.config.Config;
 import org.robovm.compiler.config.OS;
 import org.robovm.compiler.config.Resource;
 import org.robovm.compiler.config.Resource.Walker;
-import org.robovm.compiler.util.Executor;
 import org.robovm.compiler.util.ToolchainUtil;
 import org.simpleframework.xml.Transient;
 
@@ -99,12 +96,11 @@ public abstract class AbstractTarget implements Target {
             libs.add("-lrobovm-debug" + libSuffix);
         }
         libs.addAll(Arrays.asList(
-                "-lrobovm-core" + libSuffix, "-lgc" + libSuffix, "-lpthread", "-ldl", "-lm", "-lstdc++"));
+                "-lrobovm-core" + libSuffix, "-lgc" + libSuffix, "-lpthread", "-ldl", "-lm"));
         if (config.getOs().getFamily() == OS.Family.linux) {
             libs.add("-lrt");
         }
         if (config.getOs().getFamily() == OS.Family.darwin) {
-            libs.add("-lc++");
             libs.add("-liconv");
             libs.add("-lsqlite3");
             libs.add("-framework");
@@ -118,6 +114,7 @@ public abstract class AbstractTarget implements Target {
             ccArgs.add("-Wl,--gc-sections");
 //            ccArgs.add("-Wl,--print-gc-sections");
         } else if (config.getOs().getFamily() == OS.Family.darwin) {
+            ccArgs.add("-ObjC");
             File exportedSymbolsFile = new File(config.getTmpDir(), "exported_symbols");
             List<String> exportedSymbols = new ArrayList<String>();
             if (config.isSkipInstall()) {
@@ -148,19 +145,33 @@ public abstract class AbstractTarget implements Target {
                 libs.add(p);
             }
         }
+        if (config.getOs().getFamily() == OS.Family.darwin && !config.getFrameworkPaths().isEmpty()) {
+            for (File p : config.getFrameworkPaths()) {
+                ccArgs.add("-F" + p.getAbsolutePath());
+            }
+        }
         
         if (!config.getLibs().isEmpty()) {
             objectFiles = new ArrayList<File>(objectFiles);
-            for (String p : config.getLibs()) {
+            for (Config.Lib lib : config.getLibs()) {
+                String p = lib.getValue();
                 if (p.endsWith(".o")) {
                     objectFiles.add(new File(p));
                 } else if(p.endsWith(".a")) {
                     // .a file
                     if (config.getOs().getFamily() == OS.Family.darwin) {
-                        libs.add("-force_load");
+                        if (lib.isForce()) {
+                            libs.add("-force_load");
+                        }
                         libs.add(new File(p).getAbsolutePath());
                     } else {
-                        libs.addAll(Arrays.asList("-Wl,--whole-archive", new File(p).getAbsolutePath(), "-Wl,--no-whole-archive"));            
+                        if (lib.isForce()) {
+                            libs.add("-Wl,--whole-archive");
+                        }
+                        libs.add(new File(p).getAbsolutePath());            
+                        if (lib.isForce()) {
+                            libs.add("-Wl,--no-whole-archive");
+                        }
                     }
                 } else {
                     // link via -l if suffix is omitted
@@ -286,6 +297,10 @@ public abstract class AbstractTarget implements Target {
                         if (entry.getName().toLowerCase().endsWith(".class")) {
                             continue;
                         }
+                        if (entry.getName().startsWith("META-INF/robovm/")) {
+                            // Don't include anything under META-INF/robovm/
+                            continue;
+                        }
                         ZipEntry newEntry = new ZipEntry(entry.getName());
                         newEntry.setTime(entry.getTime());
                         out.putNextEntry(newEntry);
@@ -311,7 +326,12 @@ public abstract class AbstractTarget implements Target {
                     if (f.getName().toLowerCase().endsWith(".class")) {
                         continue;
                     }
-                    ZipEntry newEntry = new ZipEntry(f.getAbsolutePath().substring(basePath.length() + 1));
+                    String entryName = f.getAbsolutePath().substring(basePath.length() + 1);
+                    if (entryName.startsWith("META-INF/robovm/")) {
+                        // Don't include anything under META-INF/robovm/
+                        continue;
+                    }
+                    ZipEntry newEntry = new ZipEntry(entryName);
                     newEntry.setTime(f.lastModified());
                     out.putNextEntry(newEntry);
                     InputStream in = null;

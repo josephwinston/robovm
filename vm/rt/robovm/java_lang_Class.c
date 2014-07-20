@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -119,16 +119,16 @@ Object* Java_java_lang_Class_getEnclosingConstructor(Env* env, Class* thiz) {
 ObjectArray* Java_java_lang_Class_getInterfaces(Env* env, Class* thiz) {
     Interface* interfaces = rvmGetInterfaces(env, thiz);
     if (rvmExceptionCheck(env)) return NULL;
-    Interface* interface;
+    Interface* interfaze;
     jint length = 0;
-    LL_FOREACH(interfaces, interface) {
+    LL_FOREACH(interfaces, interfaze) {
         length++;
     }
     ObjectArray* result = rvmNewObjectArray(env, length, java_lang_Class, NULL, NULL);
     if (!result) return NULL;
     jint i = 0;
-    LL_FOREACH(interfaces, interface) {
-        result->values[i++] = (Object*) interface->interface;
+    LL_FOREACH(interfaces, interfaze) {
+        result->values[i++] = (Object*) interfaze->interfaze;
     }
     return result;
 }
@@ -277,7 +277,7 @@ ObjectArray* Java_java_lang_Class_getDeclaredFields0(Env* env, Class* clazz, jbo
     return result;
 }
 
-ObjectArray* Java_java_lang_Class_getDeclaredAnnotations(Env* env, Class* clazz) {
+ObjectArray* Java_java_lang_Class_getDeclaredAnnotations0(Env* env, Class* clazz) {
     return rvmAttributeGetClassRuntimeVisibleAnnotations(env, clazz);
 }
 

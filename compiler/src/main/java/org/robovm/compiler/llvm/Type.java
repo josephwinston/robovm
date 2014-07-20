@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,4 +31,5 @@ public abstract class Type {
     public static final PrimitiveType VOID = new PrimitiveType("void");
     public static final PointerType I8_PTR = new PointerType(I8);
     public static final PointerType I8_PTR_PTR = new PointerType(I8_PTR);
+    public static final MetadataType METADATA = new MetadataType();
 }

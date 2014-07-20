@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -37,6 +37,18 @@ public class ZipFilePath extends AbstractPath {
     ZipFilePath(File f, Clazzes clazzes, int index, boolean inBootclasspath) throws IOException {
         super(f, clazzes, index, inBootclasspath);
         this.zipFile = new ZipFile(f);
+    }
+    
+    @Override
+    public boolean contains(String file) {
+        Enumeration<? extends ZipEntry> entries = zipFile.entries();
+        while (entries.hasMoreElements()) {
+            ZipEntry entry = entries.nextElement();
+            if (entry.getName().equals(file) && !entry.isDirectory()) {
+                return true;
+            }
+        }
+        return false;
     }
     
     @Override
@@ -79,7 +91,7 @@ public class ZipFilePath extends AbstractPath {
         }
         
         public long lastModified() {
-            return entry.getTime() == -1 ? 0 : entry.getTime();
+            return file.lastModified();
         }
     }
 }

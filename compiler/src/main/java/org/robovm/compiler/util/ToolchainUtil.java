@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -39,18 +39,19 @@ public class ToolchainUtil {
     private static String IOS_DEV_CLANG; 
     private static String IOS_SIM_CLANG; 
     private static String PNGCRUSH;
+    private static String PLUTIL;
     private static String PACKAGE_APPLICATION;
 
     private static String getIOSDevClang() throws IOException {
         if (IOS_DEV_CLANG == null) {
-            IOS_DEV_CLANG = findXcodeCommand("clang", "iphoneos");
+            IOS_DEV_CLANG = findXcodeCommand("clang++", "iphoneos");
         }
         return IOS_DEV_CLANG;
     }
     
     private static String getIOSSimClang() throws IOException {
         if (IOS_SIM_CLANG == null) {
-            IOS_SIM_CLANG = findXcodeCommand("clang", "iphonesimulator");
+            IOS_SIM_CLANG = findXcodeCommand("clang++", "iphonesimulator");
         }
         return IOS_SIM_CLANG;
     }
@@ -60,6 +61,13 @@ public class ToolchainUtil {
             PNGCRUSH = findXcodeCommand("pngcrush", "iphoneos");
         }
         return PNGCRUSH;
+    }
+
+    private static String getPlutil() throws IOException {
+        if (PLUTIL == null) {
+            PLUTIL = findXcodeCommand("plutil", "iphoneos");
+        }
+        return PLUTIL;
     }
 
     private static String getPackageApplication() throws IOException {
@@ -116,6 +124,12 @@ public class ToolchainUtil {
             .exec();
     }
 
+    public static void compileStrings(Config config, File inFile, File outFile) throws IOException {
+        new Executor(config.getLogger(), getPlutil())
+            .args("-convert", "binary1", inFile, "-o", outFile)
+            .exec();
+    }
+
     public static void packageApplication(Config config, File appDir, File outFile) throws IOException {
         new Executor(config.getLogger(), getPackageApplication())
             .args(appDir, "-o", outFile)
@@ -164,7 +178,7 @@ public class ToolchainUtil {
     }
 
     private static String getCcPath(Config config) throws IOException {
-        String ccPath = config.getOs().getFamily() == OS.Family.darwin ? "clang" : "gcc";
+        String ccPath = config.getOs().getFamily() == OS.Family.darwin ? "clang++" : "g++";
         if (config.getCcBinPath() != null) {
             ccPath = config.getCcBinPath().getAbsolutePath();
         } else if (config.getOs() == OS.ios) {

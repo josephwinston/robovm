@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -16,7 +16,6 @@
  */
 package org.robovm.compiler;
 
-import static org.robovm.compiler.Annotations.*;
 import static org.robovm.compiler.Bro.*;
 import static org.robovm.compiler.Functions.*;
 import static org.robovm.compiler.Mangler.*;
@@ -24,23 +23,31 @@ import static org.robovm.compiler.Types.*;
 import static org.robovm.compiler.llvm.Linkage.*;
 import static org.robovm.compiler.llvm.ParameterAttribute.*;
 import static org.robovm.compiler.llvm.Type.*;
+import static org.robovm.compiler.Annotations.*;
 
 import java.util.ArrayList;
 import java.util.List;
 
+import org.robovm.compiler.Bro.MarshalerFlags;
+import org.robovm.compiler.MarshalerLookup.MarshalSite;
+import org.robovm.compiler.MarshalerLookup.MarshalerMethod;
+import org.robovm.compiler.MarshalerLookup.PointerMarshalerMethod;
 import org.robovm.compiler.config.Arch;
 import org.robovm.compiler.config.Config;
 import org.robovm.compiler.config.OS;
 import org.robovm.compiler.llvm.Argument;
 import org.robovm.compiler.llvm.BasicBlockRef;
+import org.robovm.compiler.llvm.Bitcast;
 import org.robovm.compiler.llvm.Br;
 import org.robovm.compiler.llvm.ConstantBitcast;
+import org.robovm.compiler.llvm.DataLayout;
 import org.robovm.compiler.llvm.Function;
 import org.robovm.compiler.llvm.FunctionType;
 import org.robovm.compiler.llvm.Global;
 import org.robovm.compiler.llvm.Icmp;
 import org.robovm.compiler.llvm.Icmp.Condition;
 import org.robovm.compiler.llvm.IntegerConstant;
+import org.robovm.compiler.llvm.Inttoptr;
 import org.robovm.compiler.llvm.Label;
 import org.robovm.compiler.llvm.Load;
 import org.robovm.compiler.llvm.NullConstant;
@@ -48,7 +55,6 @@ import org.robovm.compiler.llvm.ParameterAttribute;
 import org.robovm.compiler.llvm.PointerType;
 import org.robovm.compiler.llvm.PrimitiveType;
 import org.robovm.compiler.llvm.Ret;
-import org.robovm.compiler.llvm.StructureType;
 import org.robovm.compiler.llvm.Type;
 import org.robovm.compiler.llvm.Unreachable;
 import org.robovm.compiler.llvm.Value;
@@ -57,8 +63,9 @@ import org.robovm.compiler.llvm.VariableRef;
 import org.robovm.compiler.trampoline.Invokestatic;
 import org.robovm.compiler.trampoline.LdcClass;
 
-import soot.SootClass;
+import soot.LongType;
 import soot.SootMethod;
+import soot.tagkit.AnnotationTag;
 
 /**
  * @author niklas
@@ -71,23 +78,28 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
     }
 
     private void validateBridgeMethod(SootMethod method) {
-        if (!canMarshal(method)) {
-            throw new IllegalArgumentException("No @Marshaler for return type of" 
-                    + " @Bridge annotated method '" + method.getDeclaration() + "' in class " 
-                    + method.getDeclaringClass() + " found");
+        if (!method.isNative()) {
+            throw new IllegalArgumentException("@Bridge annotated method " 
+                    + method + " must be native");
         }
-        for (int i = 0; i < method.getParameterCount(); i++) {
-            if (!canMarshal(method, i)) {
-                throw new IllegalArgumentException("No @Marshaler for parameter " + (i + 1) 
-                        + " of @Bridge annotated method '" + method.getDeclaration() + "' in class " 
-                        + method.getDeclaringClass() + " found");
-            }            
+        AnnotationTag bridgeAnnotation = getAnnotation(method, BRIDGE);
+        if (readBooleanElem(bridgeAnnotation, "dynamic", false)) {
+            if (!method.isStatic() || method.getParameterCount() == 0
+                    || method.getParameterType(0) != LongType.v()
+                    || !hasParameterAnnotation(method, 0, POINTER)) {
+                throw new IllegalArgumentException("Dynamic @Bridge annotated method " 
+                        + method + " must be static and take a @Pointer long as first parameter");
+            }
         }
     }
-    
-    protected void doCompile(ModuleBuilder moduleBuilder, SootMethod method) {
+
+    protected Function doCompile(ModuleBuilder moduleBuilder, SootMethod method) {
         validateBridgeMethod(method);
 
+        AnnotationTag bridgeAnnotation = getAnnotation(method, BRIDGE);
+        boolean dynamic = readBooleanElem(bridgeAnnotation, "dynamic", false);
+        boolean optional = readBooleanElem(bridgeAnnotation, "optional", false);
+        
         Function fn = FunctionBuilder.method(method);
         moduleBuilder.addFunction(fn);
         
@@ -101,6 +113,7 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
         SootMethod originalMethod = method;
         Value structObj = null;
         boolean passByValue = isPassByValue(originalMethod);
+        DataLayout dataLayout = config.getDataLayout();
         if (passByValue) {
             // The method returns a struct by value. Determine whether that struct
             // is small enough to be passed in a register or has to be returned
@@ -108,8 +121,7 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
             
             Arch arch = config.getArch();
             OS os = config.getOs();
-            String triple = config.getTriple();
-            int size = getStructType(originalMethod.getReturnType()).getAllocSize(triple);
+            int size = dataLayout.getAllocSize(getStructType(originalMethod.getReturnType()));
             if (!os.isReturnedInRegisters(arch, size)) {
                 method = createFakeStructRetMethod(method);
                 
@@ -126,48 +138,53 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
                 trampolines.add(invokestatic);
                 structObj = call(fn, invokestatic.getFunctionRef(), env, cls);
     
-                // Insert the allocated struct as arg 1 or 2 (first arg is always the Env*)
-                args.add(method.isStatic() ? 1 : 2, new Argument(structObj));
+                // Insert the allocated struct as arg 1 (first arg is always the Env*)
+                args.add(1, new Argument(structObj));
             }
         }
         
-        FunctionType targetFnType = getBridgeFunctionType(method);
+        FunctionType targetFnType = getBridgeFunctionType(method, dynamic);
         if (method == originalMethod && passByValue) {
             // Returns a small struct. We need to change the return type to
             // i8/i16/i32/i64.
-            int size = ((StructureType) targetFnType.getReturnType()).getAllocSize(config.getTriple());
+            int size = dataLayout.getAllocSize(targetFnType.getReturnType());
             Type t = size <= 1 ? I8 : (size <= 2 ? I16 : (size <= 4 ? I32 : I64));
             targetFnType = new FunctionType(t, targetFnType.isVarargs(), targetFnType.getParameterTypes());
         }
 
+        VariableRef env = fn.getParameterRef(0);
+        
         // Load the address of the resolved @Bridge method
         Variable targetFn = fn.newVariable(targetFnType);
-        Global targetFnPtr = new Global(getTargetFnPtrName(originalMethod), 
-                _private, new NullConstant(I8_PTR));
-        moduleBuilder.addGlobal(targetFnPtr);
-        fn.add(new Load(targetFn, new ConstantBitcast(targetFnPtr.ref(), new PointerType(targetFnType))));
-
-        Label nullLabel = new Label();
-        Label notNullLabel = new Label();
-        Variable nullCheck = fn.newVariable(I1);
-        fn.add(new Icmp(nullCheck, Condition.eq, targetFn.ref(), new NullConstant(targetFnType)));
-        fn.add(new Br(nullCheck.ref(), fn.newBasicBlockRef(nullLabel), fn.newBasicBlockRef(notNullLabel)));
-        fn.newBasicBlock(nullLabel);
-        VariableRef env = fn.getParameterRef(0);
-        call(fn, BC_THROW_UNSATISIFED_LINK_ERROR, env,
-                moduleBuilder.getString(String.format("Bridge method %s.%s%s not bound", className,
-                        originalMethod.getName(), getDescriptor(originalMethod))));
-        fn.add(new Unreachable());
-        fn.newBasicBlock(notNullLabel);
+        if (!dynamic) {
+            Global targetFnPtr = new Global(getTargetFnPtrName(originalMethod), 
+                    _private, new NullConstant(I8_PTR));
+            moduleBuilder.addGlobal(targetFnPtr);
+            fn.add(new Load(targetFn, new ConstantBitcast(targetFnPtr.ref(), new PointerType(targetFnType))));
+    
+            Label nullLabel = new Label();
+            Label notNullLabel = new Label();
+            Variable nullCheck = fn.newVariable(I1);
+            fn.add(new Icmp(nullCheck, Condition.eq, targetFn.ref(), new NullConstant(targetFnType)));
+            fn.add(new Br(nullCheck.ref(), fn.newBasicBlockRef(nullLabel), fn.newBasicBlockRef(notNullLabel)));
+            fn.newBasicBlock(nullLabel);
+            call(fn, BC_THROW_UNSATISIFED_LINK_ERROR, env,
+                    moduleBuilder.getString(String.format((optional ? "Optional " : "")
+                            + "@Bridge method %s.%s%s not bound", className,
+                            originalMethod.getName(), getDescriptor(originalMethod))));
+            fn.add(new Unreachable());
+            fn.newBasicBlock(notNullLabel);
+        } else {
+            // Dynamic @Bridge methods pass the target function pointer as a
+            // long in the first parameter.
+            fn.add(new Inttoptr(targetFn, fn.getParameterRef(1), targetFn.getType()));
+            args.remove(originalMethod == method ? 1 : 2);
+        }
         
         // Marshal args
         
         // Remove Env* from args
         args.remove(0);
-        if (!method.isStatic()) {
-            // Remove receiver from args
-            args.remove(0);
-        }
 
         // Save the Object->handle mapping for each marshaled object. We need it
         // after the native call to call updateObject() on the marshaler for 
@@ -178,30 +195,50 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
         List<MarshaledArg> marshaledArgs = new ArrayList<MarshaledArg>();
         
         Type[] targetParameterTypes = targetFnType.getParameterTypes();
-        for (int i = 0; i < method.getParameterCount(); i++) {
+        
+        int receiverIdx = -1;
+        if (!method.isStatic()) {
+            MarshalerMethod marshalerMethod = config.getMarshalerLookup().findMarshalerMethod(new MarshalSite(method, MarshalSite.RECEIVER));
+            MarshaledArg marshaledArg = new MarshaledArg();
+            marshaledArg.paramIndex = MarshalSite.RECEIVER;
+            marshaledArgs.add(marshaledArg);
+            // The receiver is either at index 0 or 1 in args depending on whether this method returns
+            // a large struct by value or not.
+            receiverIdx = method == originalMethod ? 0 : 1;
+            Type nativeType = targetParameterTypes[receiverIdx];
+            Value nativeValue = marshalObjectToNative(fn, marshalerMethod, marshaledArg, nativeType, env, args.get(receiverIdx).getValue(),
+                    MarshalerFlags.CALL_TYPE_BRIDGE);
+            args.set(receiverIdx, new Argument(nativeValue));
+        }
+        
+        for (int i = 0, argIdx = 0; i < method.getParameterCount(); i++) {
+            if (dynamic && (method == originalMethod && i == 0 || method != originalMethod && i == 1)) {
+                // Skip the target function pointer for dynamic bridge methods.
+                continue;
+            }
+            if (argIdx == receiverIdx) {
+                // Skip the receiver in args. It doesn't correspond to a parameter.
+                argIdx++;
+            }
             soot.Type type = method.getParameterType(i);
             if (needsMarshaler(type)) {
 
-                String marshalerClassName = getMarshalerClassName(method, i, false);
+                MarshalerMethod marshalerMethod = config.getMarshalerLookup().findMarshalerMethod(new MarshalSite(method, i));
                 
                 // The return type of the marshaler's toNative() method is derived from the target function type.
-                Type nativeType = targetParameterTypes[i];
+                Type nativeType = targetParameterTypes[argIdx];
 
                 if (nativeType instanceof PrimitiveType) {
-                    if (isEnum(type)) {
-                        Value nativeValue = marshalEnumObjectToNative(fn, marshalerClassName, nativeType, env, args.get(i).getValue());
-                        args.set(i, new Argument(nativeValue));
-                    } else {
-                        Value nativeValue = marshalValueObjectToNative(fn, marshalerClassName, nativeType, env, args.get(i).getValue());
-                        args.set(i, new Argument(nativeValue));
-                    }
+                    Value nativeValue = marshalValueObjectToNative(fn, marshalerMethod, nativeType, env, 
+                            args.get(argIdx).getValue(), MarshalerFlags.CALL_TYPE_BRIDGE);
+                    args.set(argIdx, new Argument(nativeValue));
                 } else {
                     ParameterAttribute[] parameterAttributes = new ParameterAttribute[0];
                     if (isPassByValue(method, i) || isStructRet(method, i)) {
                         // The parameter must not be null. We assume that Structs 
                         // never have a NULL handle so we just check that the Java
                         // Object isn't null.
-                        call(fn, CHECK_NULL, env, args.get(i).getValue());
+                        call(fn, CHECK_NULL, env, args.get(argIdx).getValue());
                         parameterAttributes = new ParameterAttribute[1];
                         if (isStructRet(method, i)) {
                             parameterAttributes[0] = sret;
@@ -213,14 +250,16 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
                     MarshaledArg marshaledArg = new MarshaledArg();
                     marshaledArg.paramIndex = i;
                     marshaledArgs.add(marshaledArg);
-                    Value nativeValue = marshalObjectToNative(fn, marshalerClassName, marshaledArg, nativeType, env, args.get(i).getValue());
-                    args.set(i, new Argument(nativeValue, parameterAttributes));
+                    Value nativeValue = marshalObjectToNative(fn, marshalerMethod, marshaledArg, nativeType, env, args.get(argIdx).getValue(),
+                            MarshalerFlags.CALL_TYPE_BRIDGE);
+                    args.set(argIdx, new Argument(nativeValue, parameterAttributes));
                 }
                 
-            } else if (hasPointerAnnotation(method, i)) {
-                // @Pointer long. Convert from i64 to i8*
-                args.set(i, new Argument(marshalLongToPointer(fn, args.get(i).getValue())));                    
+            } else {
+                args.set(argIdx, new Argument(marshalPrimitiveToNative(fn, method, i, args.get(argIdx).getValue())));                    
             }
+            
+            argIdx++;
         }        
         
         // Execute the call to native code
@@ -233,59 +272,32 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
         trycatchLeave(fn, env);
         popNativeFrame(fn);
 
-        // Call Marshaler.updateObject() or Marshaler.updatePtr() for each object that was marshaled before
-        // the call.
-        for (MarshaledArg value : marshaledArgs) {
-            soot.Type type = method.getParameterType(value.paramIndex);
-            String marshalerClassName = getMarshalerClassName(method, value.paramIndex, true);
-            if (isPtr(type)) {
-                // Call the Marshaler's updatePtr() method
-                SootClass sootPtrTargetClass = getPtrTargetClass(method, value.paramIndex);
-                Value ptrTargetClass = ldcClass(fn, getInternalName(sootPtrTargetClass), env);
-                int ptrWrapCount = getPtrWrapCount(method, value.paramIndex);
-                Invokestatic invokestatic = new Invokestatic(
-                        getInternalName(method.getDeclaringClass()), marshalerClassName, 
-                        "updatePtr", "(Lorg/robovm/rt/bro/ptr/Ptr;Ljava/lang/Class;JI)V");
-                trampolines.add(invokestatic);
-                call(fn, invokestatic.getFunctionRef(), 
-                        env, value.object, ptrTargetClass, 
-                        value.handle, new IntegerConstant(ptrWrapCount));
-            } else {
-                // Call the Marshaler's updateObject() method
-                Invokestatic invokestatic = new Invokestatic(
-                        getInternalName(method.getDeclaringClass()), marshalerClassName, 
-                        "updateObject", "(Ljava/lang/Object;J)V");
-                trampolines.add(invokestatic);
-                call(fn, invokestatic.getFunctionRef(), 
-                        env, value.object, value.handle);
-            }
-        }
+        updateObject(method, fn, env, MarshalerFlags.CALL_TYPE_BRIDGE, marshaledArgs);
         
         // Marshal the return value
         if (needsMarshaler(method.getReturnType())) {
-            String marshalerClassName = getMarshalerClassName(method, true);
+            MarshalerMethod marshalerMethod = config.getMarshalerLookup().findMarshalerMethod(new MarshalSite(method));
             String targetClassName = getInternalName(method.getReturnType());
             
             if (passByValue) {
-                result = marshalNativeToObject(fn, marshalerClassName, null, env, 
-                        targetClassName, result, true, true);
+                // Must be a small struct since larger structs are returned in 
+                // the first parameter. Copy to the stack and then copy to the heap.
+                Value stackCopy = createStackCopy(fn, result);
+                Variable src = fn.newVariable(I8_PTR);
+                fn.add(new Bitcast(src, stackCopy, I8_PTR));
+                Value heapCopy = call(fn, BC_COPY_STRUCT, env, src.ref(), 
+                        new IntegerConstant(dataLayout.getAllocSize(result.getType())));
+                result = marshalNativeToObject(fn, marshalerMethod, null, env, 
+                        targetClassName, heapCopy, MarshalerFlags.CALL_TYPE_BRIDGE);
             } else if (targetFnType.getReturnType() instanceof PrimitiveType) {
-                if (isEnum(method.getReturnType())) {
-                    result = marshalNativeToEnumObject(fn, marshalerClassName, env, targetClassName, result);
-                } else {
-                    result = marshalNativeToValueObject(fn, marshalerClassName, env, targetClassName, result);
-                }
+                result = marshalNativeToValueObject(fn, marshalerMethod, env, 
+                        targetClassName, result, MarshalerFlags.CALL_TYPE_BRIDGE);
             } else {
-                if (isPtr(method.getReturnType())) {
-                    result = marshalNativeToPtr(fn, marshalerClassName, null, env, 
-                            getPtrTargetClass(method), result, getPtrWrapCount(method));
-                } else {
-                    result = marshalNativeToObject(fn, marshalerClassName, null, env, 
-                            targetClassName, result, passByValue);
-                }
+                result = marshalNativeToObject(fn, marshalerMethod, null, env, 
+                        targetClassName, result, MarshalerFlags.CALL_TYPE_BRIDGE);
             }
-        } else if (hasPointerAnnotation(method)) {
-            result = marshalPointerToLong(fn, result);
+        } else {
+            result = marshalNativeToPrimitive(fn, method, result);
         }
         
         if (method != originalMethod) {
@@ -297,8 +309,35 @@ public class BridgeMethodCompiler extends BroMethodCompiler {
         fn.newBasicBlock(bbFailure.getLabel());
         trycatchLeave(fn, env);
         popNativeFrame(fn);
-        call(fn, BC_THROW_IF_EXCEPTION_OCCURRED, env);
+        
+        Value ex = call(fn, BC_EXCEPTION_CLEAR, env);
+        
+        // Call Marshaler.updateObject() for each object that was marshaled before
+        // the call.
+        updateObject(method, fn, env, MarshalerFlags.CALL_TYPE_BRIDGE, marshaledArgs);
+        
+        call(fn, BC_THROW, env, ex);
         fn.add(new Unreachable());
+        
+        return fn;
+    }
+
+    private void updateObject(SootMethod method, Function fn, Value env, long flags, List<MarshaledArg> marshaledArgs) {
+        for (MarshaledArg value : marshaledArgs) {
+            MarshalerMethod marshalerMethod = config.getMarshalerLookup().findMarshalerMethod(new MarshalSite(method, value.paramIndex));
+            SootMethod afterMethod = ((PointerMarshalerMethod) marshalerMethod).getAfterBridgeCallMethod();
+            if (afterMethod != null) {
+                Invokestatic invokestatic = new Invokestatic(
+                        getInternalName(method.getDeclaringClass()),
+                        getInternalName(afterMethod.getDeclaringClass()), 
+                        afterMethod.getName(),
+                        getDescriptor(afterMethod));
+                trampolines.add(invokestatic);
+                call(fn, invokestatic.getFunctionRef(), 
+                        env, value.object, value.handle, 
+                        new IntegerConstant(flags));
+            }
+        }
     }
     
     public static String getTargetFnPtrName(SootMethod method) {

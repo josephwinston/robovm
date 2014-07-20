@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -117,6 +117,10 @@ public class Function {
         return basicBlockList.get(basicBlockList.size() - 1);
     }
 
+    public List<BasicBlock> getBasicBlocks() {
+        return basicBlockList;
+    }
+    
     public Variable newVariable(Type type) {
         return newVariable("t" + (counter++), type);
     }
@@ -140,8 +144,9 @@ public class Function {
         throw new IllegalStateException("Variable " + var + " not defined");
     }
     
-    public void add(Instruction instruction) {
+    public Instruction add(Instruction instruction) {
         getCurrentBasicBlock().add(instruction);
+        return instruction;
     }
     
     @Override
@@ -155,9 +160,9 @@ public class Function {
             sb.append(' ');
         }
         sb.append(returnType.toString());
-        sb.append(" @");
+        sb.append(" @\"");
         sb.append(name);
-        sb.append('(');
+        sb.append("\"(");
         for (int i = 0; i < parameterTypes.length; i++) {
             if (type.isVarargs() || i > 0) {
                 sb.append(", ");

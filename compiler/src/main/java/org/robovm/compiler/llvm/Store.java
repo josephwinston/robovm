@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -46,6 +46,14 @@ public class Store extends Instruction {
         this._volatile = _volatile;
         this.ordering = ordering;
         this.alignment = alignment;
+    }
+    
+    public Value getValue() {
+        return value;
+    }
+    
+    public Value getPointer() {
+        return pointer;
     }
     
     @Override

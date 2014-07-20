@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -198,10 +198,10 @@ static jboolean addProxyMethods(Env* env, Class* proxyClass, Class* clazz, Proxy
  * {@link #addProxyMethods()} which will override all methods defined by the proxy's
  * ancestor classes (abstract or concrete).
  */
-static jboolean implementAbstractInterfaceMethods(Env* env, Class* proxyClass, Interface* interface, ProxyClassData* proxyClassData) {
-    if (!interface) return TRUE;
+static jboolean implementAbstractInterfaceMethods(Env* env, Class* proxyClass, Interface* interfaze, ProxyClassData* proxyClassData) {
+    if (!interfaze) return TRUE;
 
-    Method* method = rvmGetMethods(env, interface->interface);
+    Method* method = rvmGetMethods(env, interfaze->interfaze);
     if (rvmExceptionOccurred(env)) return FALSE;
     for (; method != NULL; method = method->next) {
         if (!METHOD_IS_CLASS_INITIALIZER(method)) {
@@ -211,11 +211,11 @@ static jboolean implementAbstractInterfaceMethods(Env* env, Class* proxyClass, I
     }
 
     // Interfaces are implemented depth-first so call recursively with the super interfaces of the current interface first
-    Interface* interfaceInterfaces = rvmGetInterfaces(env, interface->interface);
+    Interface* interfaceInterfaces = rvmGetInterfaces(env, interfaze->interfaze);
     if (rvmExceptionCheck(env)) return FALSE;
     if (!implementAbstractInterfaceMethods(env, proxyClass, interfaceInterfaces, proxyClassData)) return FALSE;
     // Now proceed with the next interface
-    if (!implementAbstractInterfaceMethods(env, proxyClass, interface->next, proxyClassData)) return FALSE;
+    if (!implementAbstractInterfaceMethods(env, proxyClass, interfaze->next, proxyClassData)) return FALSE;
 
     return TRUE;
 }
@@ -299,7 +299,7 @@ static uint32_t countInterfacesForITables(Env* env, Class* c) {
     if (rvmExceptionOccurred(env)) return 0;
     uint32_t count = c->vitable->size;
     for (; ifs; ifs = ifs->next) {
-        count += countInterfacesForITables(env, ifs->interface);
+        count += countInterfacesForITables(env, ifs->interfaze);
         if (rvmExceptionOccurred(env)) return 0;
     }
     return count;
@@ -315,7 +315,7 @@ static void initITableArray(Env* env, Class* c, jint* index, ITable** array) {
     Interface* ifs = rvmGetInterfaces(env, c);
     if (rvmExceptionOccurred(env)) return;
     for (; ifs; ifs = ifs->next) {
-        initITableArray(env, ifs->interface, index, array);
+        initITableArray(env, ifs->interfaze, index, array);
         if (rvmExceptionOccurred(env)) return;
     }
 }
@@ -353,10 +353,12 @@ Class* rvmProxyCreateProxyClass(Env* env, Class* superclass, ClassLoader* classL
     ITables* itables = createITables(env, superclass, interfacesCount, interfaces);
     if (!itables) return NULL;
 
+    rvmObtainClassLock(env);
+
     // Allocate the proxy class.
     Class* proxyClass = rvmAllocateClass(env, className, superclass, classLoader, CLASS_TYPE_PROXY | ACC_PUBLIC | ACC_FINAL, typeInfo, vtable, itables,
         offsetof(Class, data) + sizeof(ProxyClassData), instanceDataSize, instanceDataOffset, 1, instanceRefCount, NULL, NULL);
-    if (!proxyClass) return NULL;
+    if (!proxyClass) goto error;
 
     ProxyClassData* proxyClassData = (ProxyClassData*) proxyClass->data;
     proxyClassData->handler = handler;
@@ -364,25 +366,29 @@ Class* rvmProxyCreateProxyClass(Env* env, Class* superclass, ClassLoader* classL
     // Add interfaces
     jint i;
     for (i = 0; i < interfacesCount; i++) {
-        if (!rvmAddInterface(env, proxyClass, (Class*) interfaces[i])) return NULL;
+        if (!rvmAddInterface(env, proxyClass, (Class*) interfaces[i])) goto error;
     }
 
     // Initialize methods to NULL to prevent rvmGetMethods() from trying to load the methods if called with this proxy class
     proxyClass->_methods = NULL;
 
-    if (!addProxyMethods(env, proxyClass, superclass, proxyClassData)) return NULL;
+    if (!addProxyMethods(env, proxyClass, superclass, proxyClassData)) goto error;
 
     Class* c = proxyClass;
     while (c) {
-        Interface* interface = rvmGetInterfaces(env, c);
-        if (rvmExceptionCheck(env)) return NULL;
-        if (!implementAbstractInterfaceMethods(env, proxyClass, interface, proxyClassData)) return NULL;
+        Interface* interfaze = rvmGetInterfaces(env, c);
+        if (rvmExceptionCheck(env)) goto error;
+        if (!implementAbstractInterfaceMethods(env, proxyClass, interfaze, proxyClassData)) goto error;
         c = c->superclass;
     }
 
-    if (!rvmRegisterClass(env, proxyClass)) return NULL;
+    if (!rvmRegisterClass(env, proxyClass)) goto error;
 
+    rvmReleaseClassLock(env);
     return proxyClass;
+error:
+    rvmReleaseClassLock(env);
+    return NULL;
 }
 
 void _rvmProxyHandler(CallInfo* callInfo) {

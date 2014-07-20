@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -124,6 +124,26 @@ extern Class* array_J;
 extern Class* array_F;
 extern Class* array_D;
 
+static inline jboolean rvmIsInterfaceTypeInfoAssignable(Env* env, TypeInfo* sti, TypeInfo* tti) {
+    uint32_t id = tti->id;
+    uint32_t ifCount = sti->interfaceCount;
+    uint32_t* base = (uint32_t*) ((((char*) sti) + sti->offset) + sizeof(uint32_t));
+    uint32_t i;
+    for (i = 0; i < ifCount; i++) {
+        if (*base == id) return TRUE;
+        base++;
+    }
+    return FALSE;
+}
+static inline jboolean rvmIsClassTypeInfoAssignable(Env* env, TypeInfo* sti, TypeInfo* tti) {
+    uint32_t id = tti->id;
+    if (tti->offset <= sti->offset) {
+        uint32_t* base = (uint32_t*) (((char*) sti) + tti->offset);
+        if (*base == id) return TRUE;
+    }
+    return FALSE;
+}
+
 extern jboolean rvmInitClasses(Env* env);
 extern jboolean rvmInitPrimitiveWrapperClasses(Env* env);
 
@@ -137,7 +157,7 @@ extern BridgeMethod* rvmAllocateBridgeMethod(Env* env, Class* clazz, const char*
         void* synchronizedImpl, void** targetFnPtr, void* attributes);
 extern CallbackMethod* rvmAllocateCallbackMethod(Env* env, Class* clazz, const char* name, const char* desc, jint vitableIndex, jint access, jint size, void* impl, 
 		void* synchronizedImpl, void* callbackImpl, void* attributes);
-extern jboolean rvmAddInterface(Env* env, Class* clazz, Class* interface);
+extern jboolean rvmAddInterface(Env* env, Class* clazz, Class* interfaze);
 extern Field* rvmAddField(Env* env, Class* clazz, const char* name, const char* desc, jint access, jint offset, void* attributes);
 extern Method* rvmAddMethod(Env* env, Class* clazz, const char* name, const char* desc, jint vitableIndex, jint access, jint size, void* impl, void* synchronizedImpl, void* attributes);
 extern BridgeMethod* rvmAddBridgeMethod(Env* env, Class* clazz, const char* name, const char* desc, jint vitableIndex, jint access, jint size, void* impl, 
@@ -199,6 +219,11 @@ extern jboolean rvmIsSamePackage(Class* c1, Class* c2);
 
 extern jboolean rvmIsAssignableFrom(Env* env, Class* sub, Class* sup);
 extern jboolean rvmIsInstanceOf(Env* env, Object* obj, Class* clazz);
+
+extern ObjectArray* rvmListClasses(Env* env, Class* instanceofClass, ClassLoader* classLoader);
+
+extern void rvmObtainClassLock(Env* env);
+extern void rvmReleaseClassLock(Env* env);
 
 #endif
 

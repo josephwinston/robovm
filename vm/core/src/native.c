@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ static jint AttachCurrentThread(JavaVM* vm, void** penv, void* args) {
     Object* group = NULL;
     if (args) {
         name = ((JavaVMAttachArgs*) args)->name;
-        group = (Object*) ((JavaVMAttachArgs*) group)->name;
+        group = (Object*) ((JavaVMAttachArgs*) args)->group;
     }
     return rvmAttachCurrentThread((VM*) vm, (Env**) penv, name, group);
 }
@@ -66,7 +66,7 @@ static jint AttachCurrentThreadAsDaemon(JavaVM* vm, void** penv, void* args) {
     Object* group = NULL;
     if (args) {
         name = ((JavaVMAttachArgs*) args)->name;
-        group = (Object*) ((JavaVMAttachArgs*) group)->name;
+        group = (Object*) ((JavaVMAttachArgs*) args)->group;
     }
     return rvmAttachCurrentThreadAsDaemon((VM*) vm, (Env**) penv, name, group);
 }

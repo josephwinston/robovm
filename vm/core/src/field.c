@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,10 +25,10 @@ static Field* getField(Env* env, Class* clazz, char* name, char* desc) {
         }
     }
 
-    Interface* interface = rvmGetInterfaces(env, clazz);
+    Interface* interfaze = rvmGetInterfaces(env, clazz);
     if (rvmExceptionCheck(env)) return NULL;
-    for (; interface != NULL; interface = interface->next) {
-        field = getField(env, interface->interface, name, desc);
+    for (; interfaze != NULL; interfaze = interfaze->next) {
+        field = getField(env, interfaze->interfaze, name, desc);
         if (rvmExceptionCheck(env)) return NULL;
         if (field) return field;
     }

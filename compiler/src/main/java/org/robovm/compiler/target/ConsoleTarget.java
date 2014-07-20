@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -85,5 +85,16 @@ public class ConsoleTarget extends AbstractTarget {
         if (arch == null) {
             arch = Arch.getDefaultArch();
         }
+    }
+    
+    @Override
+    protected void doBuild(File outFile, List<String> ccArgs,
+            List<File> objectFiles, List<String> libArgs)
+            throws IOException {
+
+        if (config.getOs() == OS.macosx) {
+            ccArgs.add("-mmacosx-version-min=10.6");
+        }
+        super.doBuild(outFile, ccArgs, objectFiles, libArgs);
     }
 }

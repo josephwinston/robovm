@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,9 +17,7 @@ package org.robovm.rt.bro;
 
 import org.robovm.rt.VM;
 import org.robovm.rt.bro.annotation.Marshaler;
-import org.robovm.rt.bro.annotation.Pointer;
-import org.robovm.rt.bro.ptr.Ptr;
-import org.robovm.rt.bro.ptr.Ptr.MarshalerCallback;
+import org.robovm.rt.bro.annotation.MarshalsPointer;
 
 
 /**
@@ -67,15 +65,8 @@ public abstract class NativeObject {
     }
     
     public static class Marshaler {
-        @SuppressWarnings("rawtypes")
-        public static final MarshalerCallback MARSHALER_CALLBACK = new MarshalerCallback() {
-            public NativeObject toObject(Class cls, long handle) {
-                return (NativeObject) NativeObject.Marshaler.toObject(cls, handle, false);
-            }
-        };
-        
-        @SuppressWarnings({ "rawtypes", "unchecked" })
-        public static Object toObject(Class cls, long handle, boolean copy) {
+        @MarshalsPointer
+        public static NativeObject toObject(Class<?> cls, long handle, long flags) {
             if (handle == 0L) {
                 return null;
             }
@@ -83,28 +74,12 @@ public abstract class NativeObject {
             o.setHandle(handle);
             return o;
         }
-
-        public static void updateObject(Object o, long handle) {
-        }
-        
-        @SuppressWarnings("rawtypes")
-        public static Ptr toPtr(Class cls, long handle, int wrapCount) {
-            return Ptr.toPtr(cls, handle, wrapCount, MARSHALER_CALLBACK);
-        }
-        
-        @SuppressWarnings("rawtypes")
-        public static void updatePtr(Ptr ptr, Class cls, long handle, int wrapCount) {
-            Ptr.updatePtr(ptr, cls, wrapCount, MARSHALER_CALLBACK);
-        }
-        
-        public static @Pointer long toNative(Object o) {
+        @MarshalsPointer
+        public static long toNative(NativeObject o, long flags) {
             if (o == null) {
                 return 0L;
             }
-            return ((NativeObject) o).getHandle();
-        }
-        
-        public static void updateNative(Object o, long handle) {
+            return o.getHandle();
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,9 @@ import java.util.Set;
 import java.util.TreeSet;
 
 import org.robovm.rt.VM;
+import org.robovm.rt.bro.annotation.MachineSizedUInt;
 import org.robovm.rt.bro.annotation.Marshaler;
+import org.robovm.rt.bro.annotation.MarshalsValue;
 
 /**
  * 
@@ -51,7 +53,7 @@ public abstract class Bits<T extends Bits<T>> implements Iterable<T>, Comparable
     }
     
     protected abstract T wrap(long value, long mask);
-    protected abstract T[] values();
+    protected abstract T[] _values();
     
     public T set(T bits) {
         Bits<?> bits_ = bits; // Avoids "... has private access in Bits" error with javac from OpenJDK 1.7
@@ -89,7 +91,7 @@ public abstract class Bits<T extends Bits<T>> implements Iterable<T>, Comparable
     
     @SuppressWarnings("unchecked")
     public Set<T> asSet() {
-        T[] all = values();
+        T[] all = _values();
         Arrays.sort(all, new Comparator<T>() {
             public int compare(T lhs, T rhs) {
                 Bits<?> lhs_ = lhs; // Avoids "... has private access in Bits" error with javac from OpenJDK 1.7
@@ -200,21 +202,77 @@ public abstract class Bits<T extends Bits<T>> implements Iterable<T>, Comparable
         }
     }
     
-    public static <T extends Bits<T>> T[] values(Class<T> cls) {
-        return VM.allocateObject(cls).values().clone();
+    /**
+     * Marshals a {@link Bits} as an 8-bit value.
+     */
+    public static class AsByteMarshaler {
+        @MarshalsValue
+        public static Bits<?> toObject(Class<?> cls, byte value, long flags) {
+            return AsLongMarshaler.toObject(cls, value & 0xffL, flags);
+        }
+        @MarshalsValue
+        public static byte toNative(Bits<?> o, long flags) {
+            return (byte) o.value;
+        }
     }
     
+    /**
+     * Marshals a {@link Bits} as a 16-bit value.
+     */
+    public static class AsShortMarshaler {
+        @MarshalsValue
+        public static Bits<?> toObject(Class<?> cls, short value, long flags) {
+            return AsLongMarshaler.toObject(cls, value & 0xffffL, flags);
+        }
+        @MarshalsValue
+        public static short toNative(Bits<?> o, long flags) {
+            return (short) o.value;
+        }
+    }
+    
+    /**
+     * Marshals a {@link Bits} as a 32-bit value.
+     */
     public static class AsIntMarshaler {
-        @SuppressWarnings({ "rawtypes", "unchecked" })
-        public static Object toObject(Class cls, int value) {
+        @MarshalsValue
+        public static Bits<?> toObject(Class<?> cls, int value, long flags) {
+            return AsLongMarshaler.toObject(cls, value & 0xffffffffL, flags);
+        }
+        @MarshalsValue
+        public static int toNative(Bits<?> o, long flags) {
+            return (int) o.value;
+        }
+    }
+    
+    /**
+     * Marshals a {@link Bits} as a 64-bit value.
+     */
+    public static class AsLongMarshaler {
+        @MarshalsValue
+        public static Bits<?> toObject(Class<?> cls, long value, long flags) {
             Bits<?> f = (Bits<?>) VM.allocateObject(cls);
-            f.value = ((long) value) & 0xffffffff;
+            f.value = value;
             f.mask = f.value == 0 ? -1 : f.value;
             return f;
         }
-        @SuppressWarnings("rawtypes")
-        public static int toNative(Object o) {
-            return (int) ((Bits) o).value;
+        @MarshalsValue
+        public static long toNative(Bits<?> o, long flags) {
+            return o.value;
+        }
+    }
+    
+    /**
+     * Marshals a {@link Bits} as a 32-bit or 64-bit value depending on the
+     * machine word size.
+     */
+    public static class AsMachineSizedIntMarshaler {
+        @MarshalsValue
+        public static Bits<?> toObject(Class<?> cls, @MachineSizedUInt long value, long flags) {
+            return AsLongMarshaler.toObject(cls, value, flags);
+        }
+        @MarshalsValue
+        public static @MachineSizedUInt long toNative(Bits<?> o, long flags) {
+            return o.value;
         }
     }
 }

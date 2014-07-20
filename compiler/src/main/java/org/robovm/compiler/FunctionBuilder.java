@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -16,7 +16,6 @@
  */
 package org.robovm.compiler;
 
-import static org.robovm.compiler.Bro.*;
 import static org.robovm.compiler.Mangler.*;
 import static org.robovm.compiler.Types.*;
 import static org.robovm.compiler.llvm.FunctionAttribute.*;
@@ -206,19 +205,6 @@ public class FunctionBuilder {
     public static Function clinitWrapper(FunctionRef targetFn) {
         return new FunctionBuilder(targetFn).suffix("_clinit")
                 .linkage(external).attribs(noinline, optsize).build();
-    }
-    
-    public static Function callback(SootMethod method) {
-        return new FunctionBuilder(method)
-            .type(getCallbackFunctionType(method)).suffix("_callback")
-            .linkage(external).attribs(noinline, optsize).build();
-    }
-
-    public static Function callback(SootMethod method, Type returnType) {
-        FunctionType ft = getCallbackFunctionType(method);
-        return new FunctionBuilder(method)
-            .type(new FunctionType(returnType, ft.isVarargs(), ft.getParameterTypes())).suffix("_callback")
-            .linkage(external).attribs(noinline, optsize).build();
     }
 
     public static Function lookup(SootMethod method, boolean isWeak) {

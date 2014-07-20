@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -82,6 +82,6 @@ public class GlobalRef extends Constant {
 
     @Override
     public String toString() {
-        return "@" + name;
+        return "@\"" + name + "\"";
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Trillian AB
+ * Copyright (C) 2013 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -45,7 +45,17 @@ public class DataLayout {
         checkDisposed();
         return LLVM.ABISizeOfType(ref, type.ref).longValue();
     }
-    
+
+    public int getABITypeAlignment(Type type) {
+        checkDisposed();
+        return LLVM.ABIAlignmentOfType(ref, type.ref);
+    }
+
+    public long getTypeStoreSize(Type type) {
+        checkDisposed();
+        return LLVM.StoreSizeOfType(ref, type.ref).longValue();
+    }
+
     @Override
     public int hashCode() {
         final int prime = 31;

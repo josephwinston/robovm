@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Trillian AB
+ * Copyright (C) 2013 Trillian Mobile AB
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,14 +23,16 @@ import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
+import java.lang.ProcessBuilder.Redirect;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeoutException;
@@ -48,6 +50,8 @@ import org.robovm.libimobiledevice.InstallationProxyClient.StatusCallback;
 import org.robovm.libimobiledevice.LibIMobileDeviceException;
 import org.robovm.libimobiledevice.LockdowndClient;
 import org.robovm.libimobiledevice.LockdowndServiceDescriptor;
+import org.robovm.libimobiledevice.MobileImageMounterClient;
+import org.robovm.libimobiledevice.binding.LibIMobileDeviceConstants;
 
 import com.dd.plist.NSArray;
 import com.dd.plist.NSDictionary;
@@ -81,6 +85,7 @@ public class AppLauncher {
     private volatile boolean killed = false;
     private StatusCallback installStatusCallback;
     private UploadProgressCallback uploadProgressCallback;
+    private String xcodePath;
     
     /**
      * Creates a new {@link AppLauncher} which will launch an already installed
@@ -258,13 +263,25 @@ public class AppLauncher {
     }
     
     /**
-     * Sets whether GDB protocol packets should be logged to {@link System#err}.
+     * Sets whether GDB protocol packets should be logged to {@link System#out}.
      * Disabled by default.
      * 
      * @param debug <code>true</code> to enabled debug logging.
      */
     public AppLauncher debug(boolean debug) {
         this.debug = debug;
+        return this;
+    }
+    
+    /**
+     * Sets the path to Xcode where developer images will be searched for. This
+     * should be set to the value returned by {@code xcode-select}. If not set
+     * {@code /Applications/Xcode.app/Contents/Developer} will be used.
+     * 
+     * @param xcodePath the Xcode path.
+     */
+    public AppLauncher xcodePath(String xcodePath) {
+        this.xcodePath = xcodePath;
         return this;
     }
     
@@ -330,21 +347,23 @@ public class AppLauncher {
         return packet.substring(start, end);
     }
 
-    private void debug(String s) {
+    private void debugGdb(String s) {
         if (debug) {
-            System.err.println(s);
+            System.out.println(s);
         }
     }
 
-    private void debug(String s, Object ... args) {
-        if (debug) {
-            System.err.format(s, args);
-            System.err.println();
-        }
+    /**
+     * Logs a message to {@link System#out}. Override this method to use a
+     * custom logger.
+     */
+    protected void log(String s, Object ... args) {
+        System.out.format(s, args);
+        System.out.println();
     }
 
     private void sendGdbPacket(IDeviceConnection conn, String packet) throws IOException {
-        debug("Sending packet: " + packet);
+        debugGdb("Sending packet: " + packet);
         byte[] data = packet.getBytes("ASCII");
         while (true) {
             int sentBytes = conn.send(data, 0, data.length);
@@ -364,7 +383,7 @@ public class AppLauncher {
         if (packetEnd != -1 && bufferedResponses.length() - packetEnd > 2) {
             String packet = bufferedResponses.substring(0, packetEnd + 3);
             bufferedResponses.delete(0, packetEnd + 3);
-            debug("Received packet: " + packet);
+            debugGdb("Received packet: " + packet);
             return packet;
         }
         
@@ -381,7 +400,7 @@ public class AppLauncher {
                 if (packetEnd != -1 && bufferedResponses.length() - packetEnd > 2) {
                     String packet = bufferedResponses.substring(0, packetEnd + 3);
                     bufferedResponses.delete(0, packetEnd + 3);
-                    debug("Received packet: " + packet);
+                    debugGdb("Received packet: " + packet);
                     return packet;
                 }
             }
@@ -400,7 +419,7 @@ public class AppLauncher {
         
         byte[] buffer = new byte[1];
         conn.receive(buffer, 0, buffer.length, RECEIVE_TIMEOUT);
-        debug("Received ack: " + (char) buffer[0]);
+        debugGdb("Received ack: " + (char) buffer[0]);
         return buffer[0] == '+';
     }
     
@@ -425,7 +444,7 @@ public class AppLauncher {
         // We're killed. Try to shutdown nicely.
         killed = false;
         Thread.interrupted();
-        debug("Sending break");
+        debugGdb("Sending break");
         conn.send(BREAK, 0, BREAK.length);
         receiveGdbPacket(conn, RECEIVE_TIMEOUT);
         sendGdbPacket(conn, encode("k"));
@@ -444,8 +463,7 @@ public class AppLauncher {
     
     private String getAppPath(LockdowndClient lockdowndClient, String appId) throws IOException {
         LockdowndServiceDescriptor instService = lockdowndClient.startService(InstallationProxyClient.SERVICE_NAME);
-        InstallationProxyClient instClient = new InstallationProxyClient(device, instService);
-        try {
+        try (InstallationProxyClient instClient = new InstallationProxyClient(device, instService)) {
             NSArray apps = instClient.browse();
             for (int i = 0; i < apps.count(); i++) {
                 NSDictionary appInfo = (NSDictionary) apps.objectAtIndex(i);
@@ -465,8 +483,6 @@ public class AppLauncher {
                 }
             }
             throw new RuntimeException("No app with id '" + appId + "' found on device");
-        } finally {
-            instClient.dispose();
         }
     }
     
@@ -474,7 +490,9 @@ public class AppLauncher {
         if (localAppPath != null) {
             try (LockdowndClient lockdowndClient = new LockdowndClient(device, getClass().getSimpleName(), true)) {
                 uploadInternal();
-                debug("[ 50%] Upload done. Installing app...");
+                if (uploadProgressCallback == null) {
+                    log("[ 50%%] Upload done. Installing app...");
+                }
                 installInternal();
                 localAppPath = null;
             } catch (IOException e) {
@@ -487,6 +505,121 @@ public class AppLauncher {
         }
     }
     
+    private File getXcodePath() throws Exception {
+        if (xcodePath != null) {
+            return new File(xcodePath);
+        }
+        
+        File tmpFile = File.createTempFile(this.getClass().getSimpleName(), ".tmp");
+        try {
+            int ret = new ProcessBuilder("xcode-select", "-print-path")
+                .redirectErrorStream(true)
+                .redirectOutput(Redirect.to(tmpFile))
+                .start().waitFor();
+            if (ret != 0) {
+                throw new IOException("xcode-select failed with error code: " + ret);
+            }
+            
+            return new File(new String(Files.readAllBytes(tmpFile.toPath()), "UTF-8").trim());
+        } finally {
+            tmpFile.delete();
+        }
+    }
+    
+    static File findDeveloperImage(File dsDir, String productVersion, String buildVersion) 
+            throws FileNotFoundException {
+        
+        String[] versionParts = getProductVersionParts(productVersion);
+        
+        String[] patterns = new String[] {
+            // 7.0.3 (11B508)
+            String.format("%s\\.%s\\.%s \\(%s\\)", versionParts[0], versionParts[1], versionParts[2], buildVersion), 
+            // 7.0.3 (*)
+            String.format("%s\\.%s\\.%s \\(.*\\)", versionParts[0], versionParts[1], versionParts[2], buildVersion), 
+            // 7.0.3
+            String.format("%s\\.%s\\.%s", versionParts[0], versionParts[1], versionParts[2]), 
+            // 7.0 (11A465)
+            String.format("%s\\.%s \\(%s\\)", versionParts[0], versionParts[1], buildVersion),
+            // 7.0 (*)
+            String.format("%s\\.%s \\(.*\\)", versionParts[0], versionParts[1], buildVersion),
+            // 7.0
+            String.format("%s\\.%s", versionParts[0], versionParts[1]) 
+        };
+        
+        File[] dirs = dsDir.listFiles();
+        for (String pattern : patterns) {
+            for (File dir : dirs) {
+                if (dir.isDirectory() && dir.getName().matches(pattern)) {
+                    File dmg = new File(dir, "DeveloperDiskImage.dmg");
+                    File sig = new File(dir, dmg.getName() + ".signature");
+                    if (dmg.isFile() && sig.isFile()) {
+                        return dmg;
+                    }
+                }
+            }
+        }
+        throw new FileNotFoundException("No DeveloperDiskImage.dmg found in " 
+                + dsDir.getAbsolutePath() + " for iOS version " + productVersion 
+                + " (" + buildVersion + ")");
+    }
+
+    /**
+     * Splits productVersion and expand to 3 parts (e.g. 7.0 -> 7.0.0)
+     */
+    private static String[] getProductVersionParts(String productVersion) {
+        String[] versionParts = Arrays.copyOf(productVersion.split("\\."), 3);
+        for (int i = 0; i < versionParts.length; i++) {
+            if (versionParts[i] == null) {
+                versionParts[i] = "0";
+            }
+        }
+        return versionParts;
+    }
+    
+    private void mountDeveloperImage(LockdowndClient lockdowndClient) throws Exception {
+        // Find the DeveloperDiskImage.dmg path that best matches the current device. Here's what
+        // the paths look like:
+        // Platforms/iPhoneOS.platform/DeviceSupport/5.0/DeveloperDiskImage.dmg
+        // Platforms/iPhoneOS.platform/DeviceSupport/6.0/DeveloperDiskImage.dmg
+        // Platforms/iPhoneOS.platform/DeviceSupport/6.1/DeveloperDiskImage.dmg
+        // Platforms/iPhoneOS.platform/DeviceSupport/7.0/DeveloperDiskImage.dmg
+        // Platforms/iPhoneOS.platform/DeviceSupport/7.0 (11A465)/DeveloperDiskImage.dmg
+        // Platforms/iPhoneOS.platform/DeviceSupport/7.0.3 (11B508)/DeveloperDiskImage.dmg
+        
+        String productVersion = lockdowndClient.getValue(null, "ProductVersion").toString(); // E.g. 7.0.2
+        String buildVersion = lockdowndClient.getValue(null, "BuildVersion").toString(); // E.g. 11B508
+        File deviceSupport = new File(getXcodePath(), "Platforms/iPhoneOS.platform/DeviceSupport");
+        log("Looking up developer disk image for iOS version %s (%s) in %s", productVersion, buildVersion, deviceSupport);
+        File devImage = findDeveloperImage(deviceSupport, productVersion, buildVersion);
+        
+        LockdowndServiceDescriptor mimService = lockdowndClient.startService(MobileImageMounterClient.SERVICE_NAME);
+        try (MobileImageMounterClient mimClient = new MobileImageMounterClient(device, mimService)) {
+
+            log("Copying developer disk image %s to device", devImage);
+            
+            int majorVersion = Integer.parseInt(getProductVersionParts(productVersion)[0]);
+            if (majorVersion >= 7) {
+                // Use new upload method
+                mimClient.uploadImage(devImage, null);
+            } else {
+                LockdowndServiceDescriptor afcService = lockdowndClient.startService(AfcClient.SERVICE_NAME);
+                try (AfcClient afcClient = new AfcClient(device, afcService)) {
+                    afcClient.makeDirectory("/PublicStaging");
+                    afcClient.fileCopy(devImage, "/PublicStaging/staging.dimage");
+                }
+            }
+            
+            log("Mounting developer disk image");
+            File devImageSig = new File(devImage.getParentFile(), devImage.getName() + ".signature");
+            byte[] devImageSigBytes = Files.readAllBytes(devImageSig.toPath());
+            NSDictionary result = mimClient.mountImage("/PublicStaging/staging.dimage", devImageSigBytes, null);
+            NSString status = (NSString) result.objectForKey("Status");
+            if (status == null || !"Complete".equals(status.toString())) {
+                throw new IOException("Failed to mount " + devImage.getAbsolutePath() + " on the device.");
+            }
+        }
+    }
+    
     private int launchInternal() throws Exception {
         install();
         
@@ -495,10 +628,24 @@ public class AppLauncher {
         
         try (LockdowndClient lockdowndClient = new LockdowndClient(device, getClass().getSimpleName(), true)) {
             appPath = getAppPath(lockdowndClient, appId);
-            LockdowndServiceDescriptor debugService = lockdowndClient.startService(DEBUG_SERVER_SERVICE_NAME);
+            LockdowndServiceDescriptor debugService = null;
+            try {
+                debugService = lockdowndClient.startService(DEBUG_SERVER_SERVICE_NAME);
+            } catch (LibIMobileDeviceException e) {
+                if (e.getErrorCode() == LibIMobileDeviceConstants.LOCKDOWN_E_INVALID_SERVICE) {
+                    // This happens when the developer image hasn't been mounted.
+                    // Mount and try again.
+                    mountDeveloperImage(lockdowndClient);
+                    debugService = lockdowndClient.startService(DEBUG_SERVER_SERVICE_NAME);
+                } else {
+                    throw e;
+                }
+            }
             conn = device.connect(debugService.getPort());
         }
 
+        log("Launching app...");
+        
         try {
             // Talk to the debugserver using the GDB remote protocol.
             // See https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html.
@@ -587,22 +734,24 @@ public class AppLauncher {
             LockdowndServiceDescriptor instproxyService = lockdowndClient.startService(InstallationProxyClient.SERVICE_NAME);
             try (InstallationProxyClient instClient = new InstallationProxyClient(device, instproxyService)) {
                 instClient.upgrade("/PublicStaging/" + localAppPath.getName(), 
-                        new Options().packageType(localAppPath.isFile() ? PackageType.Developer : null), 
+                        new Options().packageType(localAppPath.isDirectory() ? PackageType.Developer : null), 
                         new StatusCallback() {
                     
                     @Override
                     public void progress(String status, int percentComplete) {
-                        debug("[%3d%%] %s", 50 + percentComplete / 2, status);
                         if (installStatusCallback != null) {
                             installStatusCallback.progress(status, percentComplete);
+                        } else {
+                            log("[%3d%%] %s", 50 + percentComplete / 2, status);
                         }
                     }
                     @Override
                     public void success() {
                         try {
-                            debug("[100%] Installation complete");
                             if (installStatusCallback != null) {
                                 installStatusCallback.success();
+                            } else {
+                                log("[100%%] Installation complete");
                             }
                         } finally {
                             countDownLatch.countDown();
@@ -612,9 +761,10 @@ public class AppLauncher {
                     public void error(String message) {
                         try {
                             ex[0] = new LibIMobileDeviceException(message);
-                            debug("Error: %s", message);
                             if (installStatusCallback != null) {
                                 installStatusCallback.error(message);
+                            } else {
+                                log("Error: %s", message);
                             }
                         } finally {
                             countDownLatch.countDown();
@@ -636,9 +786,10 @@ public class AppLauncher {
             try (AfcClient afcClient = new AfcClient(device, afcService)) {
                 afcClient.upload(localAppPath, "/PublicStaging", new UploadProgressCallback() {
                     public void progress(File path, int percentComplete) {
-                        debug("[%3d%%] Uploading %s", percentComplete / 2, path);
                         if (uploadProgressCallback != null) {
                             uploadProgressCallback.progress(path, percentComplete);
+                        } else {
+                            log("[%3d%%] Uploading %s", percentComplete / 2, path);
                         }
                     }
                     public void success() {
@@ -647,9 +798,10 @@ public class AppLauncher {
                         }
                     }
                     public void error(String message) {
-                        debug("Error: %s", message);
                         if (uploadProgressCallback != null) {
                             uploadProgressCallback.error(message);
+                        } else {
+                            log("Error: %s", message);
                         }
                     }
                 });

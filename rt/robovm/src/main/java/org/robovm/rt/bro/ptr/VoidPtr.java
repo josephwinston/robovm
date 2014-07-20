@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 Trillian AB
+ * Copyright (C) 2012 Trillian Mobile AB
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,12 @@ import org.robovm.rt.bro.annotation.StructMember;
  * another type first.
  */
 public final class VoidPtr extends Struct<VoidPtr> {
+
+    /**
+     * Pointer to {@link VoidPtr} (<code>void **</code> in C)
+     */
+    public static class VoidPtrPtr extends org.robovm.rt.bro.ptr.Ptr<VoidPtr, VoidPtrPtr> {}
+    
     /**
      * Creates a new {@link VoidPtr} with a value of NULL.
      */
